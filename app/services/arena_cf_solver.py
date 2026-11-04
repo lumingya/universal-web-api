@@ -12,16 +12,20 @@ import sys
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from app.core.config import logger as default_logger
-from app.utils.human_mouse import cdp_precise_click, smooth_move_mouse
 from app.services.cf_turnstile_solver import (
     DEFAULT_FIND_CLICK_POINT_JS as _FIND_CLICK_POINT_JS,
+)
+from app.services.cf_turnstile_solver import (
     DEFAULT_PAGE_READY_PROBE_JS as _PAGE_READY_PROBE_JS,
+)
+from app.services.cf_turnstile_solver import (
     _interruptible_sleep,
     _urls_match,
     _wait_for_challenge_resolved,
     _wait_for_clickable_point,
     solve_turnstile_challenge,
 )
+from app.utils.human_mouse import cdp_precise_click, smooth_move_mouse
 
 _DEFAULT_MAX_ATTEMPTS = 3
 

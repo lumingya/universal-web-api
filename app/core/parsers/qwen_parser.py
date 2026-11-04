@@ -11,9 +11,10 @@ Observed stream traits:
 from __future__ import annotations
 
 import json
-from typing import Dict, Any, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from app.core.config import logger
+
 from .base import ResponseParser
 
 

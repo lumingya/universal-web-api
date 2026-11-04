@@ -6,6 +6,8 @@ import time
 from types import SimpleNamespace
 
 from app.api import system
+from app.api.system import diagnostics as system_diag
+from app.api.system import runtime as system_runtime
 
 
 class _Proc:
@@ -44,8 +46,8 @@ def test_uss_and_rss_modes(monkeypatch):
 def test_cached_stats_keep_request_counters_live(monkeypatch):
     monkeypatch.setitem(system._SYSTEM_STATS_CACHE, "payload", {"memory_mb": 1.0, "running_count": 0, "total_requests": 1})
     monkeypatch.setitem(system._SYSTEM_STATS_CACHE, "expires_at", time.monotonic() + 5)
-    monkeypatch.setattr(system, "_get_live_request_counts", lambda: {"running_count": 3, "queued_count": 2})
-    monkeypatch.setattr(system.request_manager, "total_requests", 42, raising=False)
+    monkeypatch.setattr(system_diag, "_get_live_request_counts", lambda: {"running_count": 3, "queued_count": 2})
+    monkeypatch.setattr(system_runtime.request_manager, "total_requests", 42, raising=False)
     payload = system._get_system_stats_payload_cached()
     assert payload["memory_mb"] == 1.0
     assert payload["running_count"] == 3 and payload["queued_count"] == 2

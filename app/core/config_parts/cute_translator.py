@@ -2,7 +2,8 @@
 app/core/config_parts/cute_translator.py - 展示层喵化翻译规则与逻辑模块
 """
 import re
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
+
 from .browser_constants import BrowserConstants
 
 _REQUEST_FINISH_PATTERN = re.compile(r"^完成 \(([\d.]+)s\)$")
@@ -888,27 +889,18 @@ def _cuteify_warning_message(logger_name: str, message_text: str) -> str:
     return text
 
 
-def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
-    raw_text = str(message_text or "")
-    if not raw_text or not bool(BrowserConstants.get("LOG_DEBUG_CUTE_MODE")):
-        return raw_text
-    if len(raw_text) > 4000:
-        return raw_text
+def _cuteify_debug_part_1(text: str, cute: Callable[[str], str]) -> Optional[str]:
+    """_cuteify_debug_message 的第 1/10 段匹配规则（纯搬移，逻辑未改）。
 
-    text, suppressed_count = _split_suppressed_suffix(raw_text)
-
-    def cute(alias: str) -> str:
-        return _restore_suppressed_hint(alias, suppressed_count)
-
+    返回 None 表示本段未命中，交由下一段继续匹配。
+    """
     short_text_match = _CHUNKED_SHORT_TEXT_PATTERN.match(text)
     if short_text_match:
         return cute(f"这次文本不长喵，小鹿一口气就写进去了喵（{short_text_match.group(1)} 字符）")
-
     first_block_match = _CHUNKED_FIRST_BLOCK_PATTERN.match(text)
     if first_block_match:
         total_chunks, first_end = first_block_match.groups()
         return cute(f"小鹿开始分块啦，第一块先放好了喵（1/{total_chunks}，字符 0-{first_end}）")
-
     chunked_progress_match = _CHUNKED_PROGRESS_PATTERN.match(text)
     if chunked_progress_match:
         current_chunk, total_chunks, progress_pct, start_pos, end_pos = chunked_progress_match.groups()
@@ -916,12 +908,10 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
             f"小鹿继续分块中喵，现在到第 {current_chunk}/{total_chunks} 块啦"
             f"（{progress_pct}%，字符 {start_pos}-{end_pos}）"
         )
-
     verify_pass_match = re.match(r"^输入验证通过 \(len=(\d+), diff=([+-]\d+)\)$", text)
     if verify_pass_match:
         actual_len, diff = verify_pass_match.groups()
         return cute(f"小鹿核对过输入啦，长度 {actual_len}，和目标差了 {diff} 个字符喵")
-
     verify_rich_match = re.match(
         r"^\[VERIFY_OK\] attempt=(\d+) len=(\d+) "
         r"\(rich editor core match, diff=([+-]\d+) chars\)$",
@@ -930,7 +920,6 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if verify_rich_match:
         attempt, actual_len, diff = verify_rich_match.groups()
         return cute(f"小鹿在第 {attempt} 次核对时确认富文本核心已经对上啦（长度 {actual_len}，差值 {diff}）")
-
     verify_fail_match = re.match(
         r"^\[VERIFY_FAIL\] attempt=(\d+) actual_len=(\d+) expected_len=(\d+) "
         r"mismatch_at=(-?\d+) is_rich=(True|False)",
@@ -943,11 +932,9 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
             f"小鹿发现输入还没完全对齐喵（第 {attempt} 次，当前 {actual_len}，目标 {expected_len}，"
             f"最早差异在 {mismatch_at}，富文本模式={is_rich}）"
         )
-
     verify_retry_match = re.match(r"^\[VERIFY\] attempt=(\d+) 原子写入返回 False，尝试备用方案$", text)
     if verify_retry_match:
         return cute(f"小鹿发现第 {verify_retry_match.group(1)} 次原子写入没成喵，准备切备用方案")
-
     input_snapshot_match = re.match(
         r"^\[INPUT_SNAPSHOT\] len=(\d+) nl=(\d+) head=(.+)\.\.\. tail=\.\.\.(.+)$",
         text,
@@ -959,19 +946,23 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
             f"小鹿偷看了一眼输入框现状喵（长度 {text_len}，换行 {nl_count}，"
             f"开头 {head_preview}，结尾 {tail_preview}）"
         )
-
     if text == "JS 备用方案返回 false":
         return cute("小鹿试了 JS 备用写法，但这条路也没走通喵")
     if text == "JS 分块输入遇到问题，准备进行后续修正...":
         return cute("小鹿发现分块输入有点卡壳喵，准备开始补救修正")
-
     physical_activate_match = re.match(r"^物理激活异常（可忽略）: (.+)$", text, re.S)
     if physical_activate_match:
         return cute(f"小鹿刚才想顺手激活输入框时绊了一下喵（可忽略：{physical_activate_match.group(1)}）")
-
     if text == "[NetworkMonitor] 监听被取消":
         return cute("小鹿收到取消信号啦，这轮监听先停下喵")
+    return None
 
+
+def _cuteify_debug_part_2(text: str, cute: Callable[[str], str]) -> Optional[str]:
+    """_cuteify_debug_message 的第 2/10 段匹配规则（纯搬移，逻辑未改）。
+
+    返回 None 表示本段未命中，交由下一段继续匹配。
+    """
     network_init_match = re.match(
         r"^\[NetworkMonitor\] 初始化完成 \(pattern=(.+), parser=(.+)\)$",
         text,
@@ -979,7 +970,6 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if network_init_match:
         listen_pattern, parser_name = network_init_match.groups()
         return cute(f"小鹿把网络监听器准备好了喵（目标 {listen_pattern}，解析器 {parser_name}）")
-
     network_body_ready_match = re.match(
         r"^\[NetworkMonitor\] 流响应正文已就绪 \(source=(.+), size=(\d+) chars\)$",
         text,
@@ -987,7 +977,6 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if network_body_ready_match:
         source_name, body_size = network_body_ready_match.groups()
         return cute(f"小鹿等到响应正文冒出来啦（来源 {source_name}，长度 {body_size}）")
-
     network_body_growth_match = re.match(
         r"^\[NetworkMonitor\] 流响应继续增长 \(source=(.+), size=(\d+) chars\)$",
         text,
@@ -995,18 +984,15 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if network_body_growth_match:
         source_name, body_size = network_body_growth_match.groups()
         return cute(f"小鹿看到响应还在继续长大喵（来源 {source_name}，现在 {body_size} 字符）")
-
     network_prestart_match = re.match(
         r"^\[NetworkMonitor\] 发送前启动监听 - 复用模式 \(pattern=(.+)\)$",
         text,
     )
     if network_prestart_match:
         return cute(f"小鹿已经提前把监听架好啦（目标 {network_prestart_match.group(1)}）")
-
     network_silence_match = re.match(r"^\[NetworkMonitor\] 静默超时 \(([\d.]+)s\)，结束监听$", text)
     if network_silence_match:
         return cute(f"小鹿等了 {network_silence_match.group(1)}s 发现页面安静下来了，收起监听网啦喵")
-
     network_non_target_match = re.match(
         r"^\[NetworkMonitor\] 非流式目标响应，跳过解析 \(count=(\d+), url=(.*)\)$",
         text,
@@ -1014,7 +1000,6 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if network_non_target_match:
         skip_count, url = network_non_target_match.groups()
         return cute(f"小鹿又排除了一条无关响应喵（累计跳过 {skip_count} 条，地址 {url}）")
-
     network_target_hit_match = re.match(
         r"^\[NetworkMonitor\] 命中流目标 \(status=(.*), method=(.*), url=(.*), count=(\d+)\)$",
         text,
@@ -1022,7 +1007,6 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if network_target_hit_match:
         status, method, url, hit_count = network_target_hit_match.groups()
         return cute(f"小鹿再次命中目标流啦（第 {hit_count} 次，状态 {status}，方法 {method}，地址 {url}）")
-
     network_empty_body_match = re.match(
         r"^\[NetworkMonitor\] 响应体为空，跳过 \(count=(\d+), stream=(True|False), source=(.+)\)$",
         text,
@@ -1030,7 +1014,6 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if network_empty_body_match:
         skip_count, is_stream, source_name = network_empty_body_match.groups()
         return cute(f"小鹿这次捞到的响应体还是空的喵（第 {skip_count} 次，流式={is_stream}，来源 {source_name}）")
-
     network_body_captured_match = re.match(
         r"^\[NetworkMonitor\] 捕获响应 "
         r"\(responses=(\d+), targets=(\d+), source=(.+), size=(\d+) chars\)$",
@@ -1042,18 +1025,24 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
             f"小鹿已经把这次响应内容捞上来了喵（总响应 {response_count}，目标命中 {target_count}，"
             f"来源 {source_name}，长度 {body_size}）"
         )
-
     if text == "[NetworkMonitor] 已捕获到首次响应":
         return cute("小鹿先蹲到了第一条网络响应喵")
     if text == "[NetworkMonitor] event-only 已捕获到首个网络事件":
         return cute("小鹿先抓到第一条网络事件喵")
     if text == "[NetworkMonitor] 已捕获到首个流目标响应":
         return cute("小鹿已经锁定第一个目标流响应啦喵")
+    return None
+
+
+def _cuteify_debug_part_3(text: str, cute: Callable[[str], str]) -> Optional[str]:
+    """_cuteify_debug_message 的第 3/10 段匹配规则（纯搬移，逻辑未改）。
+
+    返回 None 表示本段未命中，交由下一段继续匹配。
+    """
     if text == "[NetworkMonitor] 已捕获到首个有效流响应":
         return cute("小鹿确认第一条有效流响应到啦喵")
     if text == "[NetworkMonitor] 检测到结束标志，完成监听":
         return cute("小鹿看到结束标记啦，这轮监听可以收尾了喵")
-
     network_lock_match = re.match(
         r"^\[NetworkMonitor\] 成功锁定流目标响应 "
         r"\(status=(\d+), method=(.*), url=(.*), 初始长度=(\d+) 字符\)$",
@@ -1062,7 +1051,6 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if network_lock_match:
         status, method, url, body_size = network_lock_match.groups()
         return cute(f"小鹿已经盯上目标请求啦，正在努力把它捞出来喵（状态 {status}，初始长度 {body_size} 字符）")
-
     network_growth_new_match = re.match(
         r"^\[NetworkMonitor\] 流响应增长中 \(当前大小=(\d+) 字节\)$",
         text,
@@ -1070,7 +1058,6 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if network_growth_new_match:
         body_size = network_growth_new_match.group(1)
         return cute(f"小鹿看到响应正文还在继续长大喵（已接收 {body_size} 字节）")
-
     network_wait_parser_match = re.match(
         r"^\[NetworkMonitor\] 等待流式文本解析产出 "
         r"\(已捕获流长度=(\d+), 已静默等待=([\d.]+)s/上限=([\d.]+)s\)$",
@@ -1079,7 +1066,6 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if network_wait_parser_match:
         body_len, idle_sec, limit_sec = network_wait_parser_match.groups()
         return cute(f"小鹿正在努力拆包中，再给小鹿一点时间确认有效内容喵（已捕获 {body_len} 字节，已静默等待 {idle_sec}s）")
-
     file_paste_signal_match = _FILE_PASTE_UPLOAD_SIGNAL_PATTERN.match(text)
     if file_paste_signal_match:
         file_count, matched_name, matched_file_node, file_node_count = file_paste_signal_match.groups()
@@ -1089,7 +1075,6 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
             f"文件节点{_bool_phrase(matched_file_node, '已对上', '还没对上')}，"
             f"页面文件节点 {file_node_count} 个）"
         )
-
     file_paste_weak_signal_match = _FILE_PASTE_WEAK_SIGNAL_PATTERN.match(text)
     if file_paste_weak_signal_match:
         matched_name, file_node_count, pending_count, pending_text = file_paste_weak_signal_match.groups()
@@ -1099,35 +1084,35 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
             f"页面文件节点 {file_node_count} 个，待处理 {pending_count} 个，"
             f"等待提示{_bool_phrase(pending_text, '已经出现', '还没出现')}）"
         )
-
     file_paste_find_fail_match = re.match(r"^\[FILE_PASTE\] 查找元素失败 (.+): (.+)$", text, re.S)
     if file_paste_find_fail_match:
         selector, error_text = file_paste_find_fail_match.groups()
         return cute(f"小鹿去找目标元素时扑了个空喵（选择器 {selector}，原因 {error_text}）")
-
     file_paste_signal_fail_match = re.match(r"^\[FILE_PASTE\] 检查文件上传信号失败: (.+)$", text, re.S)
     if file_paste_signal_fail_match:
         return cute(f"小鹿刚才没看清上传信号喵（{file_paste_signal_fail_match.group(1)}）")
-
     if text == "[FILE_PASTE] 已配置 upload_btn，但当前页面未找到":
         return cute("小鹿知道这里应该有上传按钮喵，但这次页面上没看见它")
-
     file_paste_click_fail_match = re.match(r"^\[FILE_PASTE\] 点击上传按钮失败: (.+)$", text, re.S)
     if file_paste_click_fail_match:
         return cute(f"小鹿点上传按钮时手滑了一下喵（{file_paste_click_fail_match.group(1)}）")
-
     file_paste_input_list_fail_match = re.match(r"^\[FILE_PASTE\] 查找通用 file input 失败: (.+)$", text, re.S)
     if file_paste_input_list_fail_match:
         return cute(f"小鹿翻通用 file input 时遇到阻碍喵（{file_paste_input_list_fail_match.group(1)}）")
+    return None
 
+
+def _cuteify_debug_part_4(text: str, cute: Callable[[str], str]) -> Optional[str]:
+    """_cuteify_debug_message 的第 4/10 段匹配规则（纯搬移，逻辑未改）。
+
+    返回 None 表示本段未命中，交由下一段继续匹配。
+    """
     if text == "[FILE_PASTE] 当前没有可用的 file input":
         return cute("小鹿这次没找到能直接塞文件的 input 入口喵")
-
     file_paste_input_signal_match = _FILE_PASTE_INPUT_SIGNAL_PATTERN.match(text)
     if file_paste_input_signal_match:
         input_index, selector = file_paste_input_signal_match.groups()
         return cute(f"小鹿发现第 {input_index} 个上传入口已经把附件挂上页面啦（入口 {selector}）")
-
     file_paste_input_not_ready_match = re.match(
         r"^\[FILE_PASTE\] file input #(\d+) 未真正挂载文件 \(selector=(.+)\)$",
         text,
@@ -1135,7 +1120,6 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if file_paste_input_not_ready_match:
         input_index, selector = file_paste_input_not_ready_match.groups()
         return cute(f"小鹿试了第 {input_index} 个上传入口喵，但文件还没真正挂上去（入口 {selector}）")
-
     file_paste_uploaded_match = _FILE_PASTE_INPUT_UPLOADED_PATTERN.match(text)
     if file_paste_uploaded_match:
         candidate_index, file_count = file_paste_uploaded_match.groups()
@@ -1143,44 +1127,42 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
             f"小鹿已经通过第 {candidate_index} 个上传入口把文件送上去了喵"
             f"（这次挂上了 {file_count} 个文件）"
         )
-
     file_paste_input_fail_match = re.match(r"^\[FILE_PASTE\] file input #(\d+) 上传失败: (.+)$", text, re.S)
     if file_paste_input_fail_match:
         input_index, error_text = file_paste_input_fail_match.groups()
         return cute(f"小鹿操作第 {input_index} 个上传入口时翻车了喵（{error_text}）")
-
     file_paste_hint_match = _FILE_PASTE_HINT_PATTERN.match(text)
     if file_paste_hint_match:
         return cute(f"小鹿顺手补了一句提示语喵（{file_paste_hint_match.group(1)}）")
-
     file_paste_temp_file_match = _FILE_PASTE_TEMP_FILE_PATTERN.match(text)
     if file_paste_temp_file_match:
         return cute(f"小鹿先把长文本装进临时小纸条里啦（{file_paste_temp_file_match.group(1)}）")
-
     if text == "[FILE_PASTE] 已通过 CDP 原生拖拽投递文件":
         return cute("小鹿已经把文件稳稳拖进目标区域啦")
-
     file_paste_drop_coord_match = re.match(r"^\[FILE_PASTE\] 读取 drop zone 坐标失败: (.+)$", text, re.S)
     if file_paste_drop_coord_match:
         return cute(f"小鹿没读到拖拽区域坐标喵（{file_paste_drop_coord_match.group(1)}）")
-
     if text == "[FILE_PASTE] drop zone 坐标无效，跳过原生拖拽":
         return cute("小鹿量出来的拖拽落点不太靠谱喵，这次先跳过原生拖拽")
     if text == "[FILE_PASTE] 已配置 drop_zone，但当前页面未找到":
         return cute("小鹿知道这里应该有拖拽区域喵，但页面上没找到")
-
     file_paste_drag_fail_match = re.match(r"^\[FILE_PASTE\] CDP 原生拖拽失败: (.+)$", text, re.S)
     if file_paste_drag_fail_match:
         return cute(f"小鹿原生拖文件时被拦了一下喵（{file_paste_drag_fail_match.group(1)}）")
+    return None
 
+
+def _cuteify_debug_part_5(text: str, cute: Callable[[str], str]) -> Optional[str]:
+    """_cuteify_debug_message 的第 5/10 段匹配规则（纯搬移，逻辑未改）。
+
+    返回 None 表示本段未命中，交由下一段继续匹配。
+    """
     file_paste_drop_zone_fail_match = re.match(r"^\[FILE_PASTE\] drop zone 上传失败: (.+)$", text, re.S)
     if file_paste_drop_zone_fail_match:
         return cute(f"小鹿往拖拽区域投文件时没成功喵（{file_paste_drop_zone_fail_match.group(1)}）")
-
     settle_wait_match = _SEND_ATTACHMENT_SETTLE_PATTERN.match(text)
     if settle_wait_match:
         return cute(f"小鹿看到附件刚安顿好喵，再等 {settle_wait_match.group(1)}s 让它稳定一下")
-
     send_attachment_wait_match = _SEND_ATTACHMENT_WAIT_PATTERN.match(text)
     if send_attachment_wait_match:
         attachments, pending, send_disabled = send_attachment_wait_match.groups()
@@ -1189,61 +1171,56 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
             f"（附件 {attachments} 个，待处理 {pending} 个，"
             f"发送按钮{_bool_phrase(send_disabled, '暂时点不了', '已经能点了')}）"
         )
-
     send_attachment_ready_match = _SEND_ATTACHMENT_READY_PATTERN.match(text)
     if send_attachment_ready_match:
         waited, attachments = send_attachment_ready_match.groups()
         return cute(f"小鹿确认附件已经准备好啦喵（等了 {waited}s，附件 {attachments} 个）")
-
     if text == "[SEND] 已通过网络监听捕获到发送后的目标流事件":
         return cute("小鹿已经盯到发送后的目标流事件啦喵")
-
     if text == "[STEALTH] 低熵模式已启用":
         return cute("小鹿已经切进低熵模式啦")
-
     stealth_retry_match = _STEALTH_SEND_RETRY_PATTERN.match(text)
     if stealth_retry_match:
         retry_count, elapsed = stealth_retry_match.groups()
         return cute(f"小鹿又悄悄帮你重试了一次发送喵（第 {retry_count} 次，已经等了 {elapsed}s）")
-
     stealth_retry_simple_match = _STEALTH_SEND_RETRY_SIMPLE_PATTERN.match(text)
     if stealth_retry_simple_match:
         retry_count = stealth_retry_simple_match.group(1)
         return cute(f"小鹿发现消息没动静，又轻轻点了一下发送按钮（第 {retry_count} 次）喵")
-
     stealth_clipboard_no_click_match = _STEALTH_CLIPBOARD_PASTE_NOCLICK_PATTERN.match(text)
     if stealth_clipboard_no_click_match:
         return cute(
             f"小鹿这次不点输入框，直接悄悄把内容贴上去啦"
             f"（长度 {stealth_clipboard_no_click_match.group(1)}）"
         )
-
     stealth_clipboard_match = _STEALTH_CLIPBOARD_PASTE_PATTERN.match(text)
     if stealth_clipboard_match:
         return cute(f"小鹿已经把内容轻轻贴进输入框啦（长度 {stealth_clipboard_match.group(1)}）")
-
     stealth_pause_match = _STEALTH_RANDOM_PAUSE_PATTERN.match(text)
     if stealth_pause_match:
         return cute(f"小鹿故意停顿了一小下喵（+{stealth_pause_match.group(1)}s）")
-
     stealth_hesitate_match = _STEALTH_PRE_SEND_HESITATE_PATTERN.match(text)
     if stealth_hesitate_match:
         return cute(f"小鹿发送前先犹豫了一小会儿喵（{stealth_hesitate_match.group(1)}s）")
+    return None
 
+
+def _cuteify_debug_part_6(text: str, cute: Callable[[str], str]) -> Optional[str]:
+    """_cuteify_debug_message 的第 6/10 段匹配规则（纯搬移，逻辑未改）。
+
+    返回 None 表示本段未命中，交由下一段继续匹配。
+    """
     stealth_review_match = _STEALTH_REVIEW_DELAY_PATTERN.match(text)
     if stealth_review_match:
         delay_sec, text_len = stealth_review_match.groups()
         return cute(f"小鹿贴完内容后先装作认真看一眼喵（停留 {delay_sec}s，文本长度 {text_len}）")
-
     stealth_click_match = _STEALTH_HUMAN_CLICK_PATTERN.match(text)
     if stealth_click_match:
         click_x, click_y = stealth_click_match.groups()
         return cute(f"小鹿已经像人一样点下去啦（落点 {click_x}, {click_y}）")
-
     stealth_smooth_fail_match = re.match(r"^\[STEALTH\] 平滑移动异常（可忽略）: (.+)$", text, re.S)
     if stealth_smooth_fail_match:
         return cute(f"小鹿移动鼠标时轻轻绊了一下喵（可忽略：{stealth_smooth_fail_match.group(1)}）")
-
     stealth_coord_fallback_match = re.match(
         r"^\[STEALTH\] 原生属性获取坐标失败，JS getBoundingClientRect 获取: \(([-\d]+), ([-\d]+)\)$",
         text,
@@ -1251,11 +1228,9 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if stealth_coord_fallback_match:
         pos_x, pos_y = stealth_coord_fallback_match.groups()
         return cute(f"小鹿原本的坐标线索失效了喵，改走 JS 坐标兜底（{pos_x}, {pos_y}）")
-
     stealth_coord_fail_match = re.match(r"^\[STEALTH\] JS 坐标获取也失败: (.+)$", text, re.S)
     if stealth_coord_fail_match:
         return cute(f"小鹿连 JS 坐标也没拿到喵（{stealth_coord_fail_match.group(1)}）")
-
     stealth_verify_ok_match = re.match(
         r"^\[STEALTH_VERIFY\] 粘贴检查通过: actual=(\d+), expected=(\d+), ratio=([\d.]+)$",
         text,
@@ -1263,22 +1238,18 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if stealth_verify_ok_match:
         actual_len, expected_len, ratio = stealth_verify_ok_match.groups()
         return cute(f"小鹿悄悄核对过粘贴结果啦（实际 {actual_len}，目标 {expected_len}，匹配比例 {ratio}）")
-
     stealth_verify_skip_match = re.match(r"^\[STEALTH_VERIFY\] 检查跳过: (.+)$", text, re.S)
     if stealth_verify_skip_match:
         return cute(f"小鹿这次没继续深挖粘贴检查喵（{stealth_verify_skip_match.group(1)}）")
-
     if text == "[STEALTH] 跳过粘贴验证":
         return cute("小鹿这次跳过额外粘贴核对啦，继续往后走喵")
     if text == "[STEALTH] 跳过粘贴验证（STEALTH_SKIP_PASTE_VERIFY=true）":
         return cute("小鹿按配置跳过了额外粘贴核对喵，直接继续后面的动作")
-
     if text == "[STEALTH] 执行页面预热":
         return cute("小鹿先活动活动爪子喵，准备开始低熵操作啦")
     if text.startswith("[STEALTH] 页面预热完成（") and text.endswith(" 次移动）"):
         move_count = text.removeprefix("[STEALTH] 页面预热完成（").removesuffix(" 次移动）")
         return cute(f"小鹿活动了一下手脚，在页面上悄悄晃了 {move_count} 次小步子喵")
-
     stealth_warmup_done_match = _STEALTH_WARMUP_DONE_PATTERN.match(text)
     if stealth_warmup_done_match:
         move_count, origin_x, origin_y, elapsed = stealth_warmup_done_match.groups()
@@ -1286,23 +1257,26 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
             f"小鹿活动了一下手脚，在页面上悄悄晃了 {move_count} 次小步子"
             f"（起点 {origin_x},{origin_y}，耗时 {elapsed}s）喵"
         )
+    return None
 
+
+def _cuteify_debug_part_7(text: str, cute: Callable[[str], str]) -> Optional[str]:
+    """_cuteify_debug_message 的第 7/10 段匹配规则（纯搬移，逻辑未改）。
+
+    返回 None 表示本段未命中，交由下一段继续匹配。
+    """
     stealth_warmup_fail_match = re.match(r"^\[STEALTH\] 页面预热异常（可忽略）: (.+)$", text, re.S)
     if stealth_warmup_fail_match:
         return cute(f"小鹿热身时有点小插曲喵（可忽略：{stealth_warmup_fail_match.group(1)}）")
-
     send_probe_fail_match = re.match(r"^\[SEND\] 附件状态探测失败: (.+)$", text, re.S)
     if send_probe_fail_match:
         return cute(f"小鹿暂时没探明附件状态喵（{send_probe_fail_match.group(1)}）")
-
     send_post_state_fail_match = re.match(r"^\[SEND\] 发送后状态探测失败: (.+)$", text, re.S)
     if send_post_state_fail_match:
         return cute(f"小鹿发送后回头确认状态时没看清喵（{send_post_state_fail_match.group(1)}）")
-
     send_pre_read_fail_match = re.match(r"^\[SEND\] 网络活动预读失败: (.+)$", text, re.S)
     if send_pre_read_fail_match:
         return cute(f"小鹿预读网络动静时被打断了一下喵（{send_pre_read_fail_match.group(1)}）")
-
     executor_network_enabled_match = re.match(
         r"^\[Executor\] 网络监听器已启用 \(parser=(.+), listen_pattern=(.+)\)$",
         text,
@@ -1310,40 +1284,41 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if executor_network_enabled_match:
         parser_name, listen_pattern = executor_network_enabled_match.groups()
         return cute(f"小鹿把执行器的网络监听接上啦（解析器 {parser_name}，目标 {listen_pattern}）")
-
     executor_intercept_match = re.match(
         r"^\[Executor\] 网络异常拦截已启用（event-only） \(pattern=(.+)\)$",
         text,
     )
     if executor_intercept_match:
         return cute(f"小鹿把异常拦截监听也挂好了喵（目标 {executor_intercept_match.group(1)}）")
-
     extractor_match = re.match(r"^WorkflowExecutor 使用提取器: (.+)$", text)
     if extractor_match:
         return cute(f"小鹿这轮准备交给提取器 {extractor_match.group(1)} 来收尾喵")
-
     if text == "[IMAGE] 图片提取已启用":
         return cute("小鹿已经把图片提取路线也准备好了喵")
-
     kimi_register_match = re.match(r"^\[Executor\] Kimi 页面抓流已注册 document-start 注入: (.+)$", text)
     if kimi_register_match:
         return cute(f"小鹿已经把 Kimi 抓流注入挂到 document-start 啦（{kimi_register_match.group(1)}）")
-
     kimi_register_fail_match = re.match(r"^\[Executor\] Kimi document-start 注入失败: (.+)$", text, re.S)
     if kimi_register_fail_match:
         return cute(f"小鹿挂 Kimi 抓流注入时遇到点阻碍喵（{kimi_register_fail_match.group(1)}）")
-
     if text == "[Executor] Kimi 页面抓流被取消":
         return cute("小鹿这轮 Kimi 页面抓流先停下来了喵")
     if text == "[Executor] Kimi 页面抓流完成":
         return cute("小鹿确认 Kimi 页面抓流已经顺利收尾啦")
+    return None
+
+
+def _cuteify_debug_part_8(text: str, cute: Callable[[str], str]) -> Optional[str]:
+    """_cuteify_debug_message 的第 8/10 段匹配规则（纯搬移，逻辑未改）。
+
+    返回 None 表示本段未命中，交由下一段继续匹配。
+    """
     if text == "[Executor] Kimi 页面抓流请求已结束但无有效内容":
         return cute("小鹿等到 Kimi 请求结束了喵，但这次没捞到有效内容")
     if text == "[Executor] 尝试 Kimi 页面抓流模式":
         return cute("小鹿准备切到 Kimi 页面抓流模式喵")
     if text == "[Executor] 尝试网络监听模式":
         return cute("小鹿准备切到常规网络监听模式喵")
-
     kimi_hit_match = re.match(
         r"^\[Executor\] Kimi 页面抓流已命中请求 \(request_id=(.+), token=(.+)\)$",
         text,
@@ -1351,40 +1326,39 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if kimi_hit_match:
         request_id, token = kimi_hit_match.groups()
         return cute(f"小鹿已经抓到 Kimi 那边的目标请求啦（request_id={request_id}, token={token}）")
-
     kimi_output_match = re.match(r"^\[Executor\] Kimi 页面抓流产出: (.+)$", text, re.S)
     if kimi_output_match:
         return cute(f"小鹿从 Kimi 页面抓流里叼出一段内容啦（预览 {kimi_output_match.group(1)}）")
-
     kimi_silence_match = re.match(r"^\[Executor\] Kimi 页面抓流静默超时 \(([\d.]+)s\)$", text)
     if kimi_silence_match:
         return cute(f"小鹿发现 Kimi 页面抓流安静太久啦（{kimi_silence_match.group(1)}s）")
-
     executor_bg_done_match = re.match(r"^\[Executor\] 后台网络事件监听结束: (.+)$", text, re.S)
     if executor_bg_done_match:
         return cute(f"小鹿这边的后台网络监听先结束啦（{executor_bg_done_match.group(1)}）")
-
     executor_listen_done_match = re.match(r"^\[Executor\] 监听完成 \(mode=(.+)\)$", text)
     if executor_listen_done_match:
         return cute(f"小鹿确认这轮监听流程跑完啦（模式 {executor_listen_done_match.group(1)}）")
-
     step_cancelled_match = re.match(r"^步骤 (.+) 跳过（已取消）$", text)
     if step_cancelled_match:
         return cute(f"小鹿把步骤 {step_cancelled_match.group(1)} 先跳过啦，因为已经收到取消信号")
-
     step_executing_match = re.match(r"^执行: (.+) -> (.+)$", text)
     if step_executing_match:
         action_name, target_key = step_executing_match.groups()
         return cute(f"小鹿开始执行步骤啦（动作 {action_name}，目标 {target_key}）")
-
     js_exec_match = re.match(r"^\[JS_EXEC\] 执行完成: (.+)$", text, re.S)
     if js_exec_match:
         return cute(f"小鹿刚跑完一段页面脚本喵（返回预览 {js_exec_match.group(1)}）")
-
     click_exception_match = re.match(r"^点击异常: (.+)$", text, re.S)
     if click_exception_match:
         return cute(f"小鹿点这里时被绊了一下喵（{click_exception_match.group(1)}）")
+    return None
 
+
+def _cuteify_debug_part_9(text: str, cute: Callable[[str], str]) -> Optional[str]:
+    """_cuteify_debug_message 的第 9/10 段匹配规则（纯搬移，逻辑未改）。
+
+    返回 None 表示本段未命中，交由下一段继续匹配。
+    """
     content_parse_start_match = re.match(
         r"^\[CONTENT_PARSE\] 开始解析: type=(.+), raw_len=(\d+), preview=(.+)$",
         text,
@@ -1393,10 +1367,8 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if content_parse_start_match:
         content_type, raw_len, preview = content_parse_start_match.groups()
         return cute(f"小鹿开始拆内容啦（类型 {content_type}，原始长度 {raw_len}，预览 {preview}）")
-
     if text == "[CONTENT_PARSE] 内容为 None，返回空字符串":
         return cute("小鹿发现这次内容是空的喵，先按空字符串处理")
-
     content_parse_stringified_match = re.match(
         r"^\[CONTENT_PARSE\] 识别为字符串化多模态内容，递归解析 \(parser=(.+), items=(\d+)\)$",
         text,
@@ -1404,15 +1376,12 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if content_parse_stringified_match:
         parse_method, item_count = content_parse_stringified_match.groups()
         return cute(f"小鹿发现这是字符串化的多模态内容喵，准备递归拆开（解析器 {parse_method}，项目 {item_count} 个）")
-
     content_parse_plain_match = re.match(r"^\[CONTENT_PARSE\] 纯字符串返回: len=(\d+)$", text)
     if content_parse_plain_match:
         return cute(f"小鹿确认这就是普通字符串喵（长度 {content_parse_plain_match.group(1)}）")
-
     content_parse_list_match = re.match(r"^\[CONTENT_PARSE\] 已转换为 list: items=(\d+)$", text)
     if content_parse_list_match:
         return cute(f"小鹿先把内容转成列表啦（项目 {content_parse_list_match.group(1)} 个）")
-
     content_parse_done_match = re.match(
         r"^\[CONTENT_PARSE\] 多模态解析完成: text_items=(\d+), images=(\d+), result_len=(\d+), samples=(.+)$",
         text,
@@ -1421,35 +1390,36 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if content_parse_done_match:
         text_items, image_count, result_len, sample_summary = content_parse_done_match.groups()
         return cute(f"小鹿把多模态内容拆完啦（文本 {text_items} 段，图片 {image_count} 张，结果长度 {result_len}，样本 {sample_summary}）")
-
     browser_connect_match = re.match(r"^连接浏览器 127\.0\.0\.1:(\d+)$", text)
     if browser_connect_match:
         return cute(f"小鹿准备去连浏览器啦（127.0.0.1:{browser_connect_match.group(1)}）")
-
     browser_domain_match = re.match(r"^\[(.+)\] 域名: (.+)$", text)
     if browser_domain_match:
         session_id, domain_name = browser_domain_match.groups()
         return cute(f"小鹿确认标签页 {session_id} 这次跑的是域名 {domain_name}")
-
     image_history_match = re.match(r"^图片历史上传: (True|False)$", text)
     if image_history_match:
         return cute(f"小鹿这轮的历史图片上传开关是 {image_history_match.group(1)} 喵")
-
     image_source_count_match = re.match(r"^图片源消息数: (\d+)/(\d+)$", text)
     if image_source_count_match:
         selected_count, total_count = image_source_count_match.groups()
         return cute(f"小鹿这次会从 {total_count} 条消息里挑 {selected_count} 条来找图片喵")
-
     session_extractor_match = re.match(r"^\[(.+)\] 使用提取器: (.+) \[预设: (.+)\]$", text)
     if session_extractor_match:
         session_id, extractor_id, preset_name = session_extractor_match.groups()
         return cute(f"小鹿给标签页 {session_id} 选好了提取器 {extractor_id} 喵（预设 {preset_name}）")
-
     probe_step_done_match = re.match(r"^\[PROBE\] execute_step 完成: action=(.+), target=(.+)$", text)
     if probe_step_done_match:
         action_name, target_key = probe_step_done_match.groups()
         return cute(f"小鹿刚把步骤跑完啦（动作 {action_name}，目标 {target_key}）")
+    return None
 
+
+def _cuteify_debug_part_10(text: str, cute: Callable[[str], str]) -> Optional[str]:
+    """_cuteify_debug_message 的第 10/10 段匹配规则（纯搬移，逻辑未改）。
+
+    返回 None 表示本段未命中，交由下一段继续匹配。
+    """
     probe_end_match = re.match(
         r"^\[PROBE\] Workflow 循环结束，image_enabled=(True|False), should_stop=(True|False)$",
         text,
@@ -1457,56 +1427,83 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if probe_end_match:
         image_enabled, should_stop = probe_end_match.groups()
         return cute(f"小鹿把主工作流先跑完啦（图片提取={image_enabled}，停止信号={should_stop}）")
-
     if text == "[PROBE] 进入图片提取分支":
         return cute("小鹿准备拐进图片提取分支继续收尾啦")
-
     tabpool_acquire_match = re.match(r"^TabPool → (.+)$", text)
     if tabpool_acquire_match:
         return cute(f"小鹿把这轮请求领到 {tabpool_acquire_match.group(1)} 啦")
-
     tabpool_wait_done_match = re.match(r"^等待结束 → (.+)$", text)
     if tabpool_wait_done_match:
         return cute(f"小鹿终于等到 {tabpool_wait_done_match.group(1)} 空出来啦")
-
     tabpool_queue_match = re.match(r"^排队等待 \(忙碌: (.+)\)$", text)
     if tabpool_queue_match:
         return cute(f"小鹿正在排队等标签页喵（忙碌中：{tabpool_queue_match.group(1)}）")
-
     tabpool_wait_index_match = re.match(r"^等待标签页 #(\d+) 释放\.\.\.$", text)
     if tabpool_wait_index_match:
         return cute(f"小鹿正在等固定编号 #{tabpool_wait_index_match.group(1)} 的标签页空出来喵")
-
     tabpool_wait_route_match = re.match(r"^等待域名路由 '(.+)' 的标签页释放\.\.\.$", text)
     if tabpool_wait_route_match:
         return cute(f"小鹿正在等域名路由 {tabpool_wait_route_match.group(1)} 对应的标签页空出来喵")
-
     tabpool_session_active_match = re.match(r"^\[(.+)\] 已激活$", text)
     if tabpool_session_active_match:
         return cute(f"小鹿已经把标签页 {tabpool_session_active_match.group(1)} 激活好啦")
-
     tabpool_session_release_match = re.match(r"^\[(.+)\] 已释放$", text)
     if tabpool_session_release_match:
         return cute(f"小鹿已经把标签页 {tabpool_session_release_match.group(1)} 放回池子里啦")
-
     tabpool_temp_assigned_match = re.match(r"^\[(.+)\] 临时标签页已分配$", text)
     if tabpool_temp_assigned_match:
         return cute(f"小鹿先借出临时标签页 {tabpool_temp_assigned_match.group(1)} 给这轮请求喵")
-
     tabpool_temp_released_match = re.match(r"^\[(.+)\] 临时标签页已释放$", text)
     if tabpool_temp_released_match:
         return cute(f"小鹿把临时标签页 {tabpool_temp_released_match.group(1)} 还回去了喵")
-
     tabpool_assign_index_match = re.match(r"^标签页 (.+) 分配编号 #(\d+)$", text)
     if tabpool_assign_index_match:
         session_id, index_no = tabpool_assign_index_match.groups()
         return cute(f"小鹿给标签页 {session_id} 贴上了固定编号 #{index_no} 喵")
+    return None
+
+
+# 按顺序尝试各段匹配器；任何一段返回非 None 即为命中。
+_CUTE_DEBUG_MATCHERS: Tuple[Callable[[str, Callable[[str], str]], Optional[str]], ...] = (
+    _cuteify_debug_part_1,
+    _cuteify_debug_part_2,
+    _cuteify_debug_part_3,
+    _cuteify_debug_part_4,
+    _cuteify_debug_part_5,
+    _cuteify_debug_part_6,
+    _cuteify_debug_part_7,
+    _cuteify_debug_part_8,
+    _cuteify_debug_part_9,
+    _cuteify_debug_part_10,
+)
+
+
+def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
+    """把 DEBUG 日志原文翻译成展示层文案。
+
+    原实现是 619 行、圈复杂度 127 的单体函数。现按"匹配 -> 返回"的顺序结构
+    **逐字**拆成 10 段（见上方 _cuteify_debug_part_*），本函数只负责
+    前置判断与按顺序分发；各段代码内容与拆分前逐字节一致，行为不变。
+    """
+    raw_text = str(message_text or "")
+    if not raw_text or not bool(BrowserConstants.get("LOG_DEBUG_CUTE_MODE")):
+        return raw_text
+    if len(raw_text) > 4000:
+        return raw_text
+    text, suppressed_count = _split_suppressed_suffix(raw_text)
+    def cute(alias: str) -> str:
+        return _restore_suppressed_hint(alias, suppressed_count)
+
+    for _matcher in _CUTE_DEBUG_MATCHERS:
+        matched = _matcher(text, cute)
+        if matched is not None:
+            return matched
 
     extra_alias = _apply_cute_rules(_CUTE_EXTRA_RULES, text)
     if extra_alias:
         return cute(extra_alias)
-
     return raw_text
+
 
 
 # --------------------------------------------------------------------------- #

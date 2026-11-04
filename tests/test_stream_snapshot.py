@@ -14,7 +14,6 @@ import urllib.parse
 import pytest
 
 from app.core.elements import ElementFinder
-from tests._real_browser import launch_page
 from app.core.extractors.base import BaseExtractor
 from app.core.extractors.deep_mode import DeepBrowserExtractor
 from app.core.stream_monitor import StreamMonitor
@@ -24,7 +23,7 @@ from app.core.stream_snapshot import (
     decode_snapshot,
     resolve_locator,
 )
-
+from tests._real_browser import launch_page
 
 # --------------------------------------------------------------------------- #
 # helpers

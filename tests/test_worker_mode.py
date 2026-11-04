@@ -156,9 +156,9 @@ def test_tab_pool_rpc_attributes_and_unsupported_access(worker):
     assert proxy.get_pool_status() == {"total": 1}
     assert proxy.health_check()["connected"] is True
     with pytest.raises(WorkerModeUnsupported):
-        proxy.tab_pool.acquire  # noqa: B018 - 不可序列化的能力不开放
+        proxy.tab_pool.acquire
     with pytest.raises(WorkerModeUnsupported):
-        proxy.page  # noqa: B018
+        proxy.page
 
 
 def test_worker_rejects_bad_token_and_unknown_methods(worker):
@@ -180,6 +180,7 @@ def test_worker_rejects_bad_token_and_unknown_methods(worker):
 
 def test_api_process_forwards_api_requests_with_real_client_ip(worker, monkeypatch):
     import httpx
+
     import main
 
     monkeypatch.setenv(MODE_ENV, "process")
@@ -199,6 +200,7 @@ def test_api_process_forwards_api_requests_with_real_client_ip(worker, monkeypat
 def test_chat_completion_in_process_mode_executes_on_the_worker(worker, monkeypatch):
     openai = pytest.importorskip("openai")
     import httpx
+
     import main
 
     monkeypatch.setenv(MODE_ENV, "process")

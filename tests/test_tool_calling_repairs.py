@@ -5,7 +5,6 @@ from app.services.tool_calling_validation_retry import (
     _validate_tool_arguments_against_schema,
 )
 
-
 TOOLS = [
     {
         "type": "function",

@@ -9,14 +9,14 @@ app/core/workflow_editor.py - 可视化工作流编辑器注入管理
 import json
 from pathlib import Path
 from typing import Optional
-from app.core.config import BrowserConstants
+
 from app.core.config import logger
 from app.core.driver import driver_for_tab
 
 
 class WorkflowEditorInjector:
     """工作流编辑器注入器"""
-    
+
     _script_cache: Optional[str] = None
     _script_mtime: Optional[tuple[int, ...]] = None
 
@@ -35,28 +35,28 @@ class WorkflowEditorInjector:
     def _build_js_assignment(var_name: str, value) -> str:
         """生成安全的 JS 变量赋值语句。"""
         return f"window.{var_name} = {json.dumps(value, ensure_ascii=False)};"
-    
+
     @classmethod
     def _load_script(cls) -> str:
         """加载注入脚本（自动检测文件变化）"""
         script_path = Path(__file__).parent.parent.parent / "static" / "js" / "workflow-editor-inject.js"
-        
+
         if not script_path.exists():
             raise FileNotFoundError(f"编辑器脚本不存在: {script_path}")
-        
+
         # 检查文件是否有变化
         shared_path = script_path.with_name("workflow-studio.js")
         guide_path = script_path.with_name("workflow-page-guide.js")
         current_mtime = (script_path.stat().st_mtime_ns, shared_path.stat().st_mtime_ns, guide_path.stat().st_mtime_ns)
-        
+
         if cls._script_cache is None or current_mtime != cls._script_mtime:
-            with open(script_path, 'r', encoding='utf-8') as f:
+            with open(script_path, encoding='utf-8') as f:
                 cls._script_cache = shared_path.read_text(encoding="utf-8") + "\n" + guide_path.read_text(encoding="utf-8") + "\n" + f.read()
             cls._script_mtime = current_mtime
             logger.info(f"已加载编辑器脚本: {len(cls._script_cache)} 字符 (mtime: {current_mtime})")
-        
+
         return cls._script_cache
-    
+
     @classmethod
     def inject(
         cls,
@@ -67,21 +67,21 @@ class WorkflowEditorInjector:
     ) -> dict:
         """
         向标签页注入编辑器
-        
+
         Args:
             tab: DrissionPage 标签页对象
             site_config: 站点配置数据（可选）
             target_domain: 目标站点域名（用于校验，可选）
-            
+
         Returns:
             dict: {"success": bool, "message": str}
         """
         try:
             script = cls._load_script()
-            
+
             # 🆕 在 Python 端进行域名校验（更可靠）
             current_domain = driver_for_tab(tab).run_js("return window.location.hostname")
-            
+
             if target_domain and target_domain != current_domain:
                 logger.warning(f"域名不匹配: 期望 {target_domain}, 实际 {current_domain}")
                 return {
@@ -91,10 +91,10 @@ class WorkflowEditorInjector:
                     "expected_domain": target_domain,
                     "actual_domain": current_domain
                 }
-            
+
             # 检查是否已注入
             already_injected = driver_for_tab(tab).run_js("return !!window.__WORKFLOW_EDITOR_INJECTED__")
-            
+
             if already_injected:
                 # 已存在：销毁旧实例后强制重注入，避免继续运行旧脚本
                 logger.info(f"编辑器已存在，执行强制重注入: domain={target_domain}")
@@ -135,12 +135,12 @@ class WorkflowEditorInjector:
                     "config_updated": True,
                     "reinject": True
                 }
-            
+
             # 🆕 构建完整注入脚本（变量 + 编辑器代码）
             api_base = cls._api_base()
-            
+
             injection_parts = []
-            
+
             # 1. 注入 API 地址
             injection_parts.append(
                 cls._build_js_assignment("__WORKFLOW_EDITOR_API_BASE__", api_base)
@@ -148,7 +148,7 @@ class WorkflowEditorInjector:
             injection_parts.append(
                 cls._build_js_assignment("__WORKFLOW_EDITOR_TAB_ID__", str(getattr(tab, "tab_id", "") or ""))
             )
-            
+
             # 2. 注入目标域名
             if target_domain:
                 injection_parts.append(
@@ -159,34 +159,34 @@ class WorkflowEditorInjector:
                 injection_parts.append(
                     cls._build_js_assignment("__WORKFLOW_EDITOR_PRESET_NAME__", preset_name)
                 )
-            
+
             # 3. 注入站点配置
             if site_config:
                 injection_parts.append(
                     cls._build_js_assignment("__WORKFLOW_EDITOR_CONFIG__", site_config)
                 )
-            
+
             # 4. 拼接完整脚本（变量声明 + 编辑器代码）
             full_script = "\n".join(injection_parts) + "\n\n" + script
-            
+
             # 5. 一次性注入
             driver_for_tab(tab).run_js(full_script)
-            
+
             logger.info(f"编辑器已注入到: {tab.url[:50]}... (domain: {target_domain or 'unknown'})")
-            
+
             return {
                 "success": True,
                 "message": "编辑器注入成功",
                 "already_existed": False
             }
-            
+
         except FileNotFoundError as e:
             logger.error(f"编辑器脚本加载失败: {e}")
             return {"success": False, "message": str(e)}
-            
+
         except Exception as e:
             logger.error(f"编辑器注入失败: {e}")
-            return {"success": False, "message": f"注入失败: {str(e)}"}    
+            return {"success": False, "message": f"注入失败: {e!s}"}
     @classmethod
     def clear_cache(cls):
         """清除脚本缓存（开发调试用）"""

@@ -5,7 +5,7 @@ app/services/config - 配置管理模块
 - 导出配置引擎单例（保持向后兼容）
 """
 
-from .engine import ConfigEngine, ConfigConstants, DEFAULT_WORKFLOW
+from .engine import DEFAULT_WORKFLOW, ConfigConstants, ConfigEngine
 
 # 创建单例
 config_engine = ConfigEngine()

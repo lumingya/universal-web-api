@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _SITE_RULES_FILE = Path(
     os.getenv("SITE_RULES_FILE", str(_PROJECT_ROOT / "config" / "site_rules.json"))
@@ -89,7 +88,7 @@ def _read_json_file(path: Path) -> Dict[str, Any]:
         return {}
 
     try:
-        with open(path, "r", encoding="utf-8-sig") as handle:
+        with open(path, encoding="utf-8-sig") as handle:
             data = json.load(handle)
         return data if isinstance(data, dict) else {}
     except Exception:

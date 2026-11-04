@@ -7,8 +7,8 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Dict
-from app.core.driver import browser_driver, driver_for_tab
 
+from app.core.driver import browser_driver, driver_for_tab
 
 _CACHE: Dict[str, Dict[str, str]] = {}
 _CACHE_LOCK = threading.RLock()

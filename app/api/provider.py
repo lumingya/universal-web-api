@@ -13,7 +13,6 @@ from app.core import get_browser
 from app.core.config import get_logger
 from app.services.request_manager import request_manager
 
-
 logger = get_logger("API.PROVIDER")
 router = APIRouter()
 

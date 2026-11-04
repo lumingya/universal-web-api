@@ -4,6 +4,7 @@ import re
 from unittest.mock import Mock
 
 import pytest
+
 from app.core.workflow.text_input import TextInputHandler
 
 

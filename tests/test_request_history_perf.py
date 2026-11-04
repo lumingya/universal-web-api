@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import os
 import random
-import threading
+import sys
 import time
 
 import pytest
-
-import sys
 
 from app.services.request_manager import RequestManager
 

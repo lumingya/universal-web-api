@@ -8,26 +8,26 @@ app/utils/image_handler.py - 图片处理工具
 - 复制图片到剪贴板（Windows）
 """
 
-import os
-import re
+import base64
 import hashlib
+import io
+import json
+import re
 import time
 import warnings
-from app.core.config import get_logger
-import requests
-import base64
-import json
-import io
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import Dict, List, Optional
+
+import requests
 from PIL import Image
+
+from app.core.config import get_logger
+from app.utils.remote_resource import get_public_remote_resource
 from app.utils.system_clipboard import (
     ClipboardDependencyError,
     ClipboardUnsupportedError,
     copy_image_to_native_clipboard,
 )
-from app.utils.remote_resource import get_public_remote_resource
-
 
 logger = get_logger("IMG_HDL")
 
@@ -58,20 +58,20 @@ _PIL_FORMAT_EXTENSIONS = {
 def extract_images_from_messages(messages: List[Dict]) -> List[str]:
     """
     从消息列表中提取所有图片并保存到本地
-    
+
     Args:
         messages: OpenAI 格式的消息列表
-    
+
     Returns:
         本地图片路径列表 ["image/1234567890_abc.png", ...]
     """
     if not messages:
         return []
-    
+
     # 确保 image 目录存在
     IMAGE_DIR.mkdir(parents=True, exist_ok=True)
     _cleanup_expired_image_inputs()
-    
+
     image_paths = []
     total_bytes = 0
 
@@ -79,24 +79,24 @@ def extract_images_from_messages(messages: List[Dict]) -> List[str]:
         if not isinstance(msg, dict):
             continue
         content = msg.get('content')
-        
+
         if not content:
             continue
-        
+
         # 🆕 情况1：字符串格式的多模态消息（需要解析）
         if isinstance(content, str):
             # 检测是否是列表的字符串形式
             stripped = content.strip()
             if stripped.startswith('[') and stripped.endswith(']'):
                 parsed = None
-                
+
                 # 尝试 JSON 解析
                 try:
                     parsed = json.loads(stripped)
                     logger.debug("[IMAGE] JSON 解析成功")
                 except (json.JSONDecodeError, TypeError):
                     pass
-                
+
                 # 尝试 Python literal_eval
                 if parsed is None:
                     try:
@@ -105,7 +105,7 @@ def extract_images_from_messages(messages: List[Dict]) -> List[str]:
                         logger.debug("[IMAGE] Python literal_eval 解析成功")
                     except (ValueError, SyntaxError):
                         pass
-                
+
                 # 解析成功，更新 content
                 if parsed and isinstance(parsed, list):
                     content = parsed
@@ -113,21 +113,21 @@ def extract_images_from_messages(messages: List[Dict]) -> List[str]:
                     continue  # 纯文本，无图片
             else:
                 continue  # 纯文本，无图片
-        
+
         # 情况2：列表格式（多模态）
         if isinstance(content, (list, tuple)):
             for item in content:
                 if not isinstance(item, dict):
                     continue
-                
+
                 if item.get("type") == "image_url":
                     image_url_obj = item.get("image_url", {})
-                    
+
                     if isinstance(image_url_obj, dict):
                         url = image_url_obj.get("url", "")
                     else:
                         url = str(image_url_obj)
-                    
+
                     if url:
                         if len(image_paths) >= MAX_IMAGES_PER_REQUEST:
                             logger.warning(f"[IMAGE] 单次请求图片数量超过限制: {MAX_IMAGES_PER_REQUEST}")
@@ -147,20 +147,20 @@ def extract_images_from_messages(messages: List[Dict]) -> List[str]:
                                 return image_paths
                             total_bytes += image_size
                             image_paths.append(local_path)
-    
+
     if image_paths:
         logger.debug(f"[IMAGE] 成功处理 {len(image_paths)} 张图片")
-    
+
     return image_paths
 
 
 def _process_single_image(url: str) -> Optional[str]:
     """
     处理单张图片：下载或解码，保存到本地
-    
+
     Args:
         url: 图片 URL（可以是 https:// 或 data:image/... 格式）
-    
+
     Returns:
         本地文件路径，失败返回 None
     """
@@ -168,15 +168,15 @@ def _process_single_image(url: str) -> Optional[str]:
         # 情况1：Base64 Data URI
         if url.startswith("data:image"):
             return _save_base64_image(url)
-        
+
         # 情况2：网络 URL
         elif url.startswith(("http://", "https://")):
             return _download_image(url)
-        
+
         else:
             logger.warning(f"[IMAGE] 不支持的图片格式: {url[:100]}")
             return None
-    
+
     except Exception as e:
         logger.error(f"[IMAGE] 处理失败: {e}")
         return None
@@ -226,7 +226,7 @@ def _cleanup_expired_image_inputs(now: Optional[float] = None) -> None:
 def _save_base64_image(data_uri: str) -> Optional[str]:
     """
     解码并保存 Base64 图片
-    
+
     格式: data:image/png;base64,iVBORw0KGgo...
     """
     try:
@@ -235,7 +235,7 @@ def _save_base64_image(data_uri: str) -> Optional[str]:
         if not match:
             logger.warning("[IMAGE] Base64 格式无效")
             return None
-        
+
         image_format = match.group(1).lower()
         claimed_ext = f".{image_format}"
         if claimed_ext not in SUPPORTED_FORMATS:
@@ -256,13 +256,13 @@ def _save_base64_image(data_uri: str) -> Optional[str]:
         # 解码
         padded_base64 = compact_base64 + ("=" * ((4 - len(compact_base64) % 4) % 4))
         image_bytes = base64.b64decode(padded_base64, validate=True)
-        
+
         # 大小检查
         size_mb = len(image_bytes) / (1024 * 1024)
         if size_mb > MAX_IMAGE_SIZE_MB:
             logger.warning(f"[IMAGE] Base64 图片过大: {size_mb:.2f}MB")
             return None
-        
+
         detected_ext = _validate_image_bytes(image_bytes)
         if not detected_ext:
             return None
@@ -272,14 +272,14 @@ def _save_base64_image(data_uri: str) -> Optional[str]:
         file_hash = hashlib.sha256(image_bytes).hexdigest()[:12]
         filename = f"{timestamp}_{file_hash}{detected_ext}"
         filepath = IMAGE_DIR / filename
-        
+
         # 保存文件
         with open(filepath, 'wb') as f:
             f.write(image_bytes)
-        
+
         logger.debug(f"[IMAGE] Base64 已保存: {filepath} ({size_mb:.2f}MB)")
         return str(filepath)
-    
+
     except Exception as e:
         logger.error(f"[IMAGE] Base64 解码失败: {e}")
         return None
@@ -292,7 +292,7 @@ def _download_image(url: str) -> Optional[str]:
     response = None
     try:
         logger.debug(f"[IMAGE] 开始下载: {url[:100]}")
-        
+
         # 下载
         response = get_public_remote_resource(
             url,
@@ -301,7 +301,7 @@ def _download_image(url: str) -> Optional[str]:
             stream=True
         )
         response.raise_for_status()
-        
+
         # 获取内容类型
         content_type = response.headers.get('Content-Type', '')
 
@@ -314,7 +314,7 @@ def _download_image(url: str) -> Optional[str]:
                     return None
             except (TypeError, ValueError):
                 pass
-        
+
         # 流式读取内容，避免超大响应在尺寸检查前完整进入内存
         chunks = []
         total_bytes = 0
@@ -327,13 +327,13 @@ def _download_image(url: str) -> Optional[str]:
                 return None
             chunks.append(chunk)
         image_bytes = b''.join(chunks)
-        
+
         # 大小检查
         size_mb = len(image_bytes) / (1024 * 1024)
         if size_mb > MAX_IMAGE_SIZE_MB:
             logger.warning(f"[IMAGE] 下载图片过大: {size_mb:.2f}MB")
             return None
-        
+
         # 尝试从 URL 或 Content-Type 推断格式
         ext = _guess_extension(url, content_type)
 
@@ -341,20 +341,20 @@ def _download_image(url: str) -> Optional[str]:
         if not detected_ext:
             return None
         ext = detected_ext
-        
+
         # 生成文件名
         timestamp = int(time.time() * 1000)
         file_hash = hashlib.sha256(image_bytes).hexdigest()[:12]
         filename = f"{timestamp}_{file_hash}{ext}"
         filepath = IMAGE_DIR / filename
-        
+
         # 保存文件
         with open(filepath, 'wb') as f:
             f.write(image_bytes)
-        
+
         logger.info(f"[IMAGE] 下载成功: {filepath} ({size_mb:.2f}MB)")
         return str(filepath)
-    
+
     except requests.RequestException as e:
         logger.error(f"[IMAGE] 下载失败: {e}")
         return None
@@ -378,14 +378,14 @@ def _guess_extension(url: str, content_type: str) -> str:
     for ext in SUPPORTED_FORMATS:
         if url_lower.endswith(ext):
             return ext
-    
+
     # 从 Content-Type 提取
     if 'image/' in content_type:
         format_name = content_type.split('/')[-1].split(';')[0].strip()
         ext = f".{format_name}"
         if ext in SUPPORTED_FORMATS:
             return ext
-    
+
     # 默认 PNG
     return '.png'
 
@@ -395,10 +395,10 @@ def _guess_extension(url: str, content_type: str) -> str:
 def copy_image_to_clipboard(image_path: str) -> bool:
     """
     复制图片到 Windows 剪贴板
-    
+
     Args:
         image_path: 本地图片路径
-    
+
     Returns:
         是否成功
     """
@@ -411,7 +411,7 @@ def copy_image_to_clipboard(image_path: str) -> bool:
         logger.info("[CLIPBOARD] 当前平台不支持原生图片剪贴板，将依赖网页原生上传入口")
         return False
     except ClipboardDependencyError:
-        logger.error("[CLIPBOARD] 缺少 Windows 原生图片剪贴板依赖，请执行: pip install pywin32")
+        logger.error("[CLIPBOARD] 缺少 Windows 原生图片剪贴板依赖，请执行: uv sync（pywin32 已在 pyproject.toml 中声明）")
         return False
     except Exception as e:
         logger.error(f"[CLIPBOARD] 复制失败: {e}")

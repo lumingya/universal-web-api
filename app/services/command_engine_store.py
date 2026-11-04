@@ -8,12 +8,13 @@ import copy
 import json
 import os
 import re
-from typing import Dict, List, Optional, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
 from app.core.config import command_log_context
 from app.services.command_engine_common import FOLLOW_DEFAULT_PRESET, logger
 
 if TYPE_CHECKING:
-    from app.core.tab_pool import TabSession  # noqa: F401
+    from app.core.tab_pool import TabSession
 
 
 class CommandEngineStoreMixin:
@@ -41,7 +42,7 @@ class CommandEngineStoreMixin:
 
         if os.path.exists(commands_file):
             try:
-                with open(commands_file, "r", encoding="utf-8-sig") as f:
+                with open(commands_file, encoding="utf-8-sig") as f:
                     data = json.load(f)
 
                 if isinstance(data, dict):
@@ -70,7 +71,7 @@ class CommandEngineStoreMixin:
             return []
 
         try:
-            with open(local_file, "r", encoding="utf-8-sig") as f:
+            with open(local_file, encoding="utf-8-sig") as f:
                 data = json.load(f)
 
             self._commands_local_mtime = os.path.getmtime(local_file)

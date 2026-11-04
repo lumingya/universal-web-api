@@ -20,7 +20,6 @@ from typing import Any, Callable, Dict, Optional
 from app.core.config import PROJECT_ROOT, get_logger
 from app.core.parsers.lmarena_parser import _CP1252_TO_LATIN1
 
-
 logger = get_logger("RESULT.EVENT.BRIDGE")
 _WRITE_LOCK = threading.Lock()
 _DEDUPE_LOCK = threading.Lock()

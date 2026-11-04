@@ -14,35 +14,34 @@ import copy
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from app.core.page_lifecycle import (
     BACKGROUND_WAKE_JS_TIMEOUT,
 )
 from app.services.command_defs import ACTION_TYPES, TRIGGER_TYPES, get_default_command
 from app.services.command_engine_actions import CommandEngineActionsMixin
+from app.services.command_engine_crud import CommandEngineCrudMixin
+from app.services.command_engine_page_check import CommandEnginePageCheckMixin
+from app.services.command_engine_pages import CommandEnginePagesMixin
 from app.services.command_engine_results import CommandEngineResultsMixin
 from app.services.command_engine_runtime import CommandEngineRuntimeMixin
-from app.services.command_engine_pages import CommandEnginePagesMixin
 from app.services.command_engine_scheduler import CommandEngineSchedulerMixin
 from app.services.command_engine_store import CommandEngineStoreMixin
-from app.services.command_engine_crud import CommandEngineCrudMixin
 from app.services.command_engine_triggers import CommandEngineTriggersMixin
-from app.services.command_engine_page_check import CommandEnginePageCheckMixin
 
 if TYPE_CHECKING:
     from app.core.tab_pool import TabSession
 
 # R2-3：模块级常量、日志器与可选依赖迁到 command_engine_common，这里重新导出以保持兼容
-from app.services.command_engine_common import (  # noqa: E402,F401
-    FOLLOW_DEFAULT_PRESET,
-    HAS_REQUESTS,
+from app.services.command_engine_common import (  # noqa: F401
     _NON_ASCII_RE,
     _WHITESPACE_RE,
     _WORD_LIKE_KEYWORD_RE,
+    FOLLOW_DEFAULT_PRESET,
+    HAS_REQUESTS,
     logger,
 )
-
 
 # ================= 常量 =================
 

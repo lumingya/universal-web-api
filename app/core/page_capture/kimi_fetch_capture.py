@@ -10,12 +10,12 @@ from typing import Any, Dict, Generator
 
 from app.core.cdp_hygiene import decode_js_json
 from app.core.config import logger
+from app.core.driver import driver_for_tab
 from app.core.network_monitor import NetworkMonitorError, NetworkMonitorTimeout
 from app.core.parsers import ParserRegistry
 
 from .base import PageFetchCapture
 from .registry import register_page_fetch_capture
-from app.core.driver import driver_for_tab
 
 
 class KimiPageFetchCapture(PageFetchCapture):

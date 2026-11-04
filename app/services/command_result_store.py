@@ -16,7 +16,7 @@ import tempfile
 import threading
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 try:
     import requests
@@ -200,7 +200,7 @@ def clear_command_results(command_id: str, rule_id: str = "") -> int:
 
 
 # 业务转发兼容层（保持既有测试与导入不中断）
-from app.services.arena_rule_service import (  # noqa: E402
+from app.services.arena_rule_service import (
     _detector_accepts,
     _matches_rule,
     record_arena_rule_candidates,

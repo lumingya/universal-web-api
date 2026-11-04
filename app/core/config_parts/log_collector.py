@@ -1,10 +1,11 @@
 """
 app/core/config_parts/log_collector.py - Web 前端日志收集器模块
 """
-from collections import deque
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from collections import deque
+from typing import Any, Dict, List, Tuple
+
 from .browser_constants import _browser_constant_bool, _browser_constant_int
 
 

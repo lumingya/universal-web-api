@@ -9,8 +9,9 @@ import re
 import string
 import time
 from datetime import date, timedelta
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 from urllib.parse import urlsplit
+
 from app.core.driver import as_element, driver_for_tab
 
 try:
@@ -21,26 +22,56 @@ except ImportError:
 
 from app.core.config import get_logger
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
-from app.core.request_transport import (
-    execute_request_transport,
-    get_default_request_transport_config,
-)
-from app.services.command_defs import ACTION_TYPES, TRIGGER_TYPES, CommandFlowAbort
+from app.core.tab_pool_parts._arena_snapshot import _ARENA_STORE_SNAPSHOT_JS
 from app.services.arena_rule_service import record_arena_rule_candidates
+from app.services.command_defs import ACTION_TYPES, TRIGGER_TYPES, CommandFlowAbort
 from app.services.sse_utils import iter_sse_payloads
 from app.services.transport_profile_handlers import (
     get_transport_profile_handler,
-    register_transport_profile_handler,
 )
 from app.utils.browser_profile_identity import resolve_tab_browser_profile
-from app.utils.site_url import extract_remote_site_domain
-from app.core.tab_pool_parts._arena_snapshot import _ARENA_STORE_SNAPSHOT_JS
 
 if TYPE_CHECKING:
     from app.core.tab_pool_parts.session import TabSession
 
 
 logger = get_logger("CMD_ENG")
+
+# ---------------------------------------------------------------------------
+# 动作类型 -> 处理器方法名
+#
+# _execute_action 原为 416 行的 if/elif 派发链（CC 123）。改为查表后新增
+# 一个动作只需在这里登记一行，不必再往链尾追加 elif（那正是原结构不断
+# 长长的原因）。表里的每个方法名必须真实存在，由
+# tests/test_command_action_registry.py 断言；与 command_defs.ACTION_TYPES
+# 的一致性也由同一测试锁定，避免 UI 上能选的动作在运行时落到"未知类型"。
+# ---------------------------------------------------------------------------
+
+_ACTION_HANDLERS: Dict[str, str] = {
+    "abort_task": "_action_abort_task",
+    "append_file": "_execute_append_file_action",
+    "clear_cookies": "_action_clear_cookies",
+    "click_captcha_challenge": "_execute_captcha_challenge_click_action",
+    "click_coordinates": "_action_click_coordinates",
+    "click_element": "_action_click_element",
+    "execute_command_group": "_execute_command_group_action",
+    "execute_preset": "_execute_preset_action",
+    "execute_workflow": "_execute_workflow_action",
+    "http_request": "_execute_http_request_action",
+    "navigate": "_action_navigate",
+    "new_chat": "_action_new_chat",
+    "read_element": "_execute_read_element_action",
+    "refresh_page": "_action_refresh_page",
+    "release_tab_lock": "_action_release_tab_lock",
+    "run_js": "_action_run_js",
+    "run_js_file": "_action_run_js_file",
+    "send_napcat": "_execute_napcat_action",
+    "send_webhook": "_execute_webhook_action",
+    "switch_preset": "_execute_preset_action",
+    "switch_proxy": "_execute_switch_proxy",
+    "wait": "_action_wait",
+    "write_element": "_execute_write_element_action",
+}
 
 MAX_COMMAND_WORKFLOW_SSE_BUFFER_CHARS = 262144
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -212,7 +243,7 @@ class CommandEngineActionsMixin:
             raise ValueError("missing_file_path")
         if not os.path.isfile(resolved):
             raise ValueError(f"file_not_found: {resolved}")
-        with open(resolved, "r", encoding=encoding or "utf-8-sig") as f:
+        with open(resolved, encoding=encoding or "utf-8-sig") as f:
             return resolved, f.read()
 
     @staticmethod
@@ -740,7 +771,7 @@ return (() => {
         timeout_sec = max(0.5, self._coerce_float(action.get("timeout_sec", 6), 6.0))
         random_radius = max(0, self._coerce_int(action.get("random_radius", 4), 4))
         deadline = time.time() + timeout_sec
-        
+
         max_attempts = action.get("max_attempts")
         if max_attempts is not None:
             try:
@@ -857,426 +888,464 @@ return (() => {
             "last_probe": last_probe,
         }
 
-    def _execute_action(self, action: Dict, session: 'TabSession') -> Any:
-        action_type = action.get("type", "")
+    def _action_clear_cookies(self, action: Dict, session: "TabSession") -> Any:
+        """处理 "clear_cookies" 动作。
+
+        从 _execute_action 的 if/elif 派发链中原样提出，方法体与
+        提取前逐字节相同（仅缩进变化），为下一步改为注册表做准备。
+        """
         tab = session.tab
+        try:
+            current_url = str(getattr(tab, "url", "") or "").strip()
+            split = urlsplit(current_url) if current_url else None
+            origin = ""
+            hostname = ""
+            if split and split.scheme in {"http", "https"} and split.netloc:
+                origin = f"{split.scheme}://{split.netloc}"
+                hostname = split.hostname or ""
 
-        if action_type == "clear_cookies":
-            try:
-                current_url = str(getattr(tab, "url", "") or "").strip()
-                split = urlsplit(current_url) if current_url else None
-                origin = ""
-                hostname = ""
-                if split and split.scheme in {"http", "https"} and split.netloc:
-                    origin = f"{split.scheme}://{split.netloc}"
-                    hostname = split.hostname or ""
+            deleted_cookies = 0
+            origin_cleared = False
 
-                deleted_cookies = 0
-                origin_cleared = False
-
-                if origin:
-                    try:
-                        driver_for_tab(tab).run_cdp("Storage.clearDataForOrigin", origin=origin, storageTypes="all")
-                        origin_cleared = True
-                    except Exception as e:
-                        logger.debug(f"[CMD] 按源清空存储失败（忽略）: {e}")
-
-                cookie_items = []
-                for kwargs in (
-                    {"urls": [current_url]} if current_url else None,
-                    {},
-                ):
-                    if kwargs is None:
-                        continue
-                    try:
-                        result = driver_for_tab(tab).run_cdp("Network.getCookies", **kwargs) or {}
-                        cookies = result.get("cookies") or []
-                        if cookies:
-                            cookie_items = cookies
-                            break
-                    except Exception as e:
-                        logger.debug(f"[CMD] 获取 Cookie 失败（忽略）: {e}")
-
-                seen_keys = set()
-                for cookie in cookie_items:
-                    name = str(cookie.get("name", "") or "").strip()
-                    domain = str(cookie.get("domain", "") or "").strip()
-                    path = str(cookie.get("path", "/") or "/").strip() or "/"
-                    if not name:
-                        continue
-                    if hostname:
-                        normalized_domain = domain.lstrip(".").lower()
-                        if normalized_domain and normalized_domain != hostname.lower() and not hostname.lower().endswith(f".{normalized_domain}"):
-                            continue
-                    dedupe_key = (name, domain, path)
-                    if dedupe_key in seen_keys:
-                        continue
-                    seen_keys.add(dedupe_key)
-                    delete_kwargs = {"name": name, "path": path}
-                    if domain:
-                        delete_kwargs["domain"] = domain
-                    elif current_url:
-                        delete_kwargs["url"] = current_url
-                    try:
-                        driver_for_tab(tab).run_cdp("Network.deleteCookies", **delete_kwargs)
-                        deleted_cookies += 1
-                    except Exception as e:
-                        logger.debug(f"[CMD] 删除 Cookie 失败（忽略）: {e}")
-
+            if origin:
                 try:
-                    driver_for_tab(tab).run_js(
-                        "try { localStorage.clear(); } catch (e) {}"
-                        "try { sessionStorage.clear(); } catch (e) {}"
-                        "try { document.cookie.split(';').forEach(function(c) {"
-                        "  var name = c.trim().split('=')[0];"
-                        "  if (!name) return;"
-                        "  document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;';"
-                        "}); } catch (e) {}"
-                    )
+                    driver_for_tab(tab).run_cdp("Storage.clearDataForOrigin", origin=origin, storageTypes="all")
+                    origin_cleared = True
                 except Exception as e:
-                    logger.debug(f"[CMD] 清空页面存储失败（忽略）: {e}")
+                    logger.debug(f"[CMD] 按源清空存储失败（忽略）: {e}")
 
-                logger.debug(
-                    f"[CMD] Cookie/存储已清除: 地址={current_url or '-'}, "
-                    f"按源清空={origin_cleared}, 已删除 Cookie 数={deleted_cookies}"
-                )
-                return "cookies_cleared"
-            except Exception as e:
-                logger.warning(f"[CMD] 清除 Cookie 失败: {e}")
-                return f"cookies_clear_failed: {e}"
-
-        elif action_type == "refresh_page":
-            try:
-                tab.refresh()
+            cookie_items = []
+            for kwargs in (
+                {"urls": [current_url]} if current_url else None,
+                {},
+            ):
+                if kwargs is None:
+                    continue
                 try:
-                    self.notify_tab_navigated(session, reason="action_refresh_page")
+                    result = driver_for_tab(tab).run_cdp("Network.getCookies", **kwargs) or {}
+                    cookies = result.get("cookies") or []
+                    if cookies:
+                        cookie_items = cookies
+                        break
+                except Exception as e:
+                    logger.debug(f"[CMD] 获取 Cookie 失败（忽略）: {e}")
+
+            seen_keys = set()
+            for cookie in cookie_items:
+                name = str(cookie.get("name", "") or "").strip()
+                domain = str(cookie.get("domain", "") or "").strip()
+                path = str(cookie.get("path", "/") or "/").strip() or "/"
+                if not name:
+                    continue
+                if hostname:
+                    normalized_domain = domain.lstrip(".").lower()
+                    if normalized_domain and normalized_domain != hostname.lower() and not hostname.lower().endswith(f".{normalized_domain}"):
+                        continue
+                dedupe_key = (name, domain, path)
+                if dedupe_key in seen_keys:
+                    continue
+                seen_keys.add(dedupe_key)
+                delete_kwargs = {"name": name, "path": path}
+                if domain:
+                    delete_kwargs["domain"] = domain
+                elif current_url:
+                    delete_kwargs["url"] = current_url
+                try:
+                    driver_for_tab(tab).run_cdp("Network.deleteCookies", **delete_kwargs)
+                    deleted_cookies += 1
+                except Exception as e:
+                    logger.debug(f"[CMD] 删除 Cookie 失败（忽略）: {e}")
+
+            try:
+                driver_for_tab(tab).run_js(
+                    "try { localStorage.clear(); } catch (e) {}"
+                    "try { sessionStorage.clear(); } catch (e) {}"
+                    "try { document.cookie.split(';').forEach(function(c) {"
+                    "  var name = c.trim().split('=')[0];"
+                    "  if (!name) return;"
+                    "  document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;';"
+                    "}); } catch (e) {}"
+                )
+            except Exception as e:
+                logger.debug(f"[CMD] 清空页面存储失败（忽略）: {e}")
+
+            logger.debug(
+                f"[CMD] Cookie/存储已清除: 地址={current_url or '-'}, "
+                f"按源清空={origin_cleared}, 已删除 Cookie 数={deleted_cookies}"
+            )
+            return "cookies_cleared"
+        except Exception as e:
+            logger.warning(f"[CMD] 清除 Cookie 失败: {e}")
+            return f"cookies_clear_failed: {e}"
+
+    def _action_refresh_page(self, action: Dict, session: "TabSession") -> Any:
+        """处理 "refresh_page" 动作。
+
+        从 _execute_action 的 if/elif 派发链中原样提出，方法体与
+        提取前逐字节相同（仅缩进变化），为下一步改为注册表做准备。
+        """
+        tab = session.tab
+        try:
+            tab.refresh()
+            try:
+                self.notify_tab_navigated(session, reason="action_refresh_page")
+            except Exception:
+                pass
+            time.sleep(2)
+            logger.debug("[CMD] 页面已刷新")
+            return "page_refreshed"
+        except Exception as e:
+            logger.warning(f"[CMD] 刷新页面失败: {e}")
+            return f"refresh_failed: {e}"
+
+    def _action_new_chat(self, action: Dict, session: "TabSession") -> Any:
+        """处理 "new_chat" 动作。
+
+        从 _execute_action 的 if/elif 派发链中原样提出，方法体与
+        提取前逐字节相同（仅缩进变化），为下一步改为注册表做准备。
+        """
+        tab = session.tab
+        try:
+            engine = self._get_config_engine()
+            domain = self._get_session_domain(session)
+            site_data = engine._get_site_data(domain, session.preset_name)
+            if site_data:
+                selector = site_data.get("selectors", {}).get("new_chat_btn", "")
+                if selector:
+                    ele = driver_for_tab(tab).find(selector, timeout=3)
+                    if ele:
+                        ele.click()
+                        time.sleep(1)
+                        logger.debug("[CMD] 新建对话完成")
+                        return "new_chat_clicked"
+                    else:
+                        logger.warning("[CMD] 新建对话按钮未找到")
+                        return "new_chat_button_not_found"
+                else:
+                    logger.warning("[CMD] 未配置新建对话按钮选择器（new_chat_btn）")
+                    return "new_chat_selector_missing"
+        except Exception as e:
+            logger.warning(f"[CMD] 新建对话失败: {e}")
+            return f"new_chat_failed: {e}"
+
+    def _action_run_js(self, action: Dict, session: "TabSession") -> Any:
+        """处理 "run_js" 动作。
+
+        从 _execute_action 的 if/elif 派发链中原样提出，方法体与
+        提取前逐字节相同（仅缩进变化），为下一步改为注册表做准备。
+        """
+        tab = session.tab
+        code = action.get("code", "")
+        if code:
+            try:
+                result = self._run_command_js(tab, code)
+                retry_on_results = action.get("retry_on_results", [])
+                if isinstance(retry_on_results, str):
+                    retry_on_results = [
+                        item.strip() for item in retry_on_results.split(",") if item.strip()
+                    ]
+                elif not isinstance(retry_on_results, list):
+                    retry_on_results = []
+
+                try:
+                    retry_attempts = max(0, int(action.get("retry_attempts", 0)))
+                except Exception:
+                    retry_attempts = 0
+
+                retry_after_refresh = bool(action.get("retry_after_refresh", False))
+                try:
+                    retry_wait_seconds = max(0.0, float(action.get("retry_wait_seconds", 0)))
+                except Exception:
+                    retry_wait_seconds = 0.0
+
+                attempt = 0
+                while attempt < retry_attempts and str(result) in retry_on_results:
+                    attempt += 1
+                    logger.info(
+                        f"[CMD] JS 命中重试条件: 返回值={result}, "
+                        f"第 {attempt}/{retry_attempts} 次, 刷新后重试={retry_after_refresh}"
+                    )
+                    if retry_after_refresh:
+                        try:
+                            tab.refresh()
+                            try:
+                                self.notify_tab_navigated(session, reason="action_run_js_retry_refresh")
+                            except Exception:
+                                pass
+                            time.sleep(2)
+                        except Exception as refresh_error:
+                            logger.warning(f"[CMD] JS 重试前刷新失败: {refresh_error}")
+                            break
+                    if retry_wait_seconds > 0:
+                        time.sleep(retry_wait_seconds)
+                    result = self._run_command_js(tab, code)
+                logger.debug(f"[CMD] JS 执行完成: {str(result)[:100]}")
+
+                # 当 JS 返回假值（None/""/False/0）时，视为执行未成功，
+                # 返回 {ok: False} 以便 page_check 触发器重置 latch 并重试。
+                # 默认开启；如 JS 本身就应返回假值，用户可在动作中设置 fail_on_falsy: false
+                fail_on_falsy = action.get("fail_on_falsy", True)
+                if fail_on_falsy and not result:
+                    logger.info(f"[CMD] JS 返回假值，按 fail_on_falsy 记为失败: {result!r}")
+                    return {"ok": False, "js_result": result, "reason": "falsy_result"}
+
+                return result
+            except Exception as e:
+                logger.warning(f"[CMD] JS 执行失败: {e}")
+                return f"js_failed: {e}"
+        return ""
+
+    def _action_run_js_file(self, action: Dict, session: "TabSession") -> Any:
+        """处理 "run_js_file" 动作。
+
+        从 _execute_action 的 if/elif 派发链中原样提出，方法体与
+        提取前逐字节相同（仅缩进变化），为下一步改为注册表做准备。
+        """
+        tab = session.tab
+        file_path = action.get("file_path", "")
+        encoding = str(action.get("encoding", "utf-8-sig") or "utf-8-sig").strip() or "utf-8-sig"
+        try:
+            resolved_path, code = self._load_action_text_file(file_path, encoding=encoding)
+        except Exception as e:
+            logger.warning(f"[CMD] JS 文件读取失败: path={file_path!r}, error={e}")
+            return f"js_file_read_failed: {e}"
+
+        if not code.strip():
+            logger.warning(f"[CMD] JS 文件为空: {resolved_path}")
+            return "js_file_empty"
+
+        inject_on_new_document = self._coerce_action_bool(
+            action.get("inject_on_new_document", True),
+            True,
+        )
+        apply_now = self._coerce_action_bool(action.get("apply_now", True), True)
+        registry = self._ensure_command_init_script_registry(session)
+        registry_key = resolved_path.lower()
+        registry_entry = registry.get(registry_key) if isinstance(registry.get(registry_key), dict) else None
+        script_identifier = ""
+
+        if inject_on_new_document:
+            try:
+                previous_identifier = str((registry_entry or {}).get("identifier", "") or "").strip()
+                previous_source = str((registry_entry or {}).get("source", "") or "")
+                if previous_identifier and previous_source and previous_source != code:
+                    try:
+                        driver_for_tab(tab).run_cdp(
+                            "Page.removeScriptToEvaluateOnNewDocument",
+                            identifier=previous_identifier,
+                            _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                        )
+                    except Exception as remove_error:
+                        logger.debug(f"[CMD] 旧 JS 预注入脚本移除失败（忽略）: {remove_error}")
+                    previous_identifier = ""
+
+                if not previous_identifier or previous_source != code:
+                    result = driver_for_tab(tab).run_cdp(
+                        "Page.addScriptToEvaluateOnNewDocument",
+                        source=code,
+                        _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                    )
+                    if isinstance(result, dict):
+                        script_identifier = str(
+                            result.get("identifier")
+                            or result.get("scriptId")
+                            or result.get("id")
+                            or ""
+                        ).strip()
+                    elif result not in (None, ""):
+                        script_identifier = str(result).strip()
+                    registry[registry_key] = {
+                        "identifier": script_identifier,
+                        "source": code,
+                        "path": resolved_path,
+                    }
+                else:
+                    script_identifier = previous_identifier
+            except Exception as e:
+                logger.warning(f"[CMD] JS 文件预注入失败: path={resolved_path}, error={e}")
+                return f"js_file_preinject_failed: {e}"
+
+        run_result = None
+        if apply_now:
+            try:
+                run_result = self._run_command_js(tab, code)
+            except Exception as e:
+                logger.warning(f"[CMD] JS 文件执行失败: path={resolved_path}, error={e}")
+                return f"js_file_run_failed: {e}"
+
+        fail_on_falsy = action.get("fail_on_falsy", False)
+        if apply_now and fail_on_falsy and not run_result:
+            logger.info(f"[CMD] JS 文件返回假值，按 fail_on_falsy 记为失败: {run_result!r}")
+            return {"ok": False, "js_result": run_result, "reason": "falsy_result"}
+
+        result_payload = {
+            "ok": True,
+            "path": resolved_path,
+            "applied_now": apply_now,
+            "inject_on_new_document": inject_on_new_document,
+            "script_id": script_identifier,
+            "result": run_result,
+        }
+        logger.debug(
+            f"[CMD] JS 文件已处理: path={resolved_path}, apply_now={apply_now}, "
+            f"inject_on_new_document={inject_on_new_document}, script_id={script_identifier or '-'}"
+        )
+        return result_payload
+
+    def _action_wait(self, action: Dict, session: "TabSession") -> Any:
+        """处理 "wait" 动作。
+
+        从 _execute_action 的 if/elif 派发链中原样提出，方法体与
+        提取前逐字节相同（仅缩进变化），为下一步改为注册表做准备。
+        """
+        seconds = float(action.get("seconds", 1))
+        time.sleep(seconds)
+        logger.debug(f"[CMD] 等待 {seconds}秒")
+        return f"waited:{seconds}"
+
+    def _action_click_element(self, action: Dict, session: "TabSession") -> Any:
+        """处理 "click_element" 动作。
+
+        从 _execute_action 的 if/elif 派发链中原样提出，方法体与
+        提取前逐字节相同（仅缩进变化），为下一步改为注册表做准备。
+        """
+        tab = session.tab
+        selector = action.get("selector", "")
+        if selector:
+            try:
+                ele = driver_for_tab(tab).find(selector, timeout=3)
+                if ele:
+                    # 获取当前站点的 stealth 配置
+                    config_engine = self._get_config_engine()
+                    site_cfg = config_engine._get_site_data(
+                        self._get_session_domain(session),
+                        session.preset_name
+                    )
+                    is_stealth = site_cfg.get("stealth", False) if site_cfg else False
+
+                    if is_stealth:
+                        logger.debug(f"[CMD] 准备低熵模式点击元素: {selector}")
+                        # 尝试通过 JS 获取元素中心坐标
+                        rect = as_element(ele).run_js(
+                            "const r = this.getBoundingClientRect();"
+                            "return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}"
+                        )
+                        click_x_raw = rect.get('x') if isinstance(rect, dict) else None
+                        click_y_raw = rect.get('y') if isinstance(rect, dict) else None
+                        if click_x_raw is not None and click_y_raw is not None:
+                            click_x = int(click_x_raw) + __import__('random').randint(-4, 4)
+                            click_y = int(click_y_raw) + __import__('random').randint(-4, 4)
+                            from app.utils.human_mouse import cdp_precise_click, smooth_move_mouse
+                            # 平滑移动到坐标再进行精确按压
+                            smooth_move_mouse(tab, (click_x - 50, click_y - 50), (click_x, click_y))
+                            time.sleep(__import__('random').uniform(0.05, 0.15))
+                            success = cdp_precise_click(tab, click_x, click_y)
+                            if success:
+                                logger.debug(f"[CMD] 元素已低熵点击: {selector} at ({click_x}, {click_y})")
+                                return f"element_stealth_clicked:{selector}"
+                            else:
+                                logger.warning(f"[CMD] 元素低熵点击事件派发失败: {selector}")
+                                return f"element_stealth_click_failed:{selector}"
+                        else:
+                            logger.warning(f"[CMD] 低熵点击无法获取目标坐标，取消普通点击降级: {selector}")
+                            return f"element_stealth_click_unavailable:{selector}"
+                    else:
+                        ele.click()
+                        time.sleep(1)
+                        logger.debug(f"[CMD] 元素已点击: {selector}")
+                        return f"element_clicked:{selector}"
+                else:
+                    logger.warning(f"[CMD] 待点击的元素未找到: {selector}")
+                    return f"element_not_found:{selector}"
+            except Exception as e:
+                logger.warning(f"[CMD] 点击元素失败: {e}")
+                return f"click_element_failed:{e}"
+        return "click_element_skipped_no_selector"
+
+    def _action_click_coordinates(self, action: Dict, session: "TabSession") -> Any:
+        """处理 "click_coordinates" 动作。
+
+        从 _execute_action 的 if/elif 派发链中原样提出，方法体与
+        提取前逐字节相同（仅缩进变化），为下一步改为注册表做准备。
+        """
+        tab = session.tab
+        try:
+            x = int(action.get("x", 0))
+            y = int(action.get("y", 0))
+            from app.utils.human_mouse import cdp_precise_click
+            # cdp_precise_click handles its own debug logging and execution securely via CDP
+            success = cdp_precise_click(tab, x, y)
+            if success:
+                time.sleep(0.5)
+                logger.debug(f"[CMD] 坐标已点击: ({x}, {y})")
+                return f"coordinates_clicked:({x},{y})"
+            else:
+                logger.warning(f"[CMD] 坐标点击失败: ({x}, {y})")
+                return f"coordinates_click_failed:({x},{y})"
+        except Exception as e:
+            logger.warning(f"[CMD] 坐标点击失败，参数异常: {e}")
+            return f"click_coordinates_failed:{e}"
+
+    def _action_navigate(self, action: Dict, session: "TabSession") -> Any:
+        """处理 "navigate" 动作。
+
+        从 _execute_action 的 if/elif 派发链中原样提出，方法体与
+        提取前逐字节相同（仅缩进变化），为下一步改为注册表做准备。
+        """
+        tab = session.tab
+        url = self._render_template(action.get("url", ""), self._build_template_context(session)).strip()
+        if url:
+            try:
+                tab.get(url)
+                try:
+                    self.notify_tab_navigated(session, reason="action_navigate")
                 except Exception:
                     pass
                 time.sleep(2)
-                logger.debug("[CMD] 页面已刷新")
-                return "page_refreshed"
+                logger.debug(f"[CMD] 已导航到: {url}")
+                return f"navigated:{url}"
             except Exception as e:
-                logger.warning(f"[CMD] 刷新页面失败: {e}")
-                return f"refresh_failed: {e}"
+                logger.warning(f"[CMD] 导航失败: {e}")
+                return f"navigate_failed:{e}"
+        return "navigate_skipped"
 
-        elif action_type == "new_chat":
-            try:
-                engine = self._get_config_engine()
-                domain = self._get_session_domain(session)
-                site_data = engine._get_site_data(domain, session.preset_name)
-                if site_data:
-                    selector = site_data.get("selectors", {}).get("new_chat_btn", "")
-                    if selector:
-                        ele = driver_for_tab(tab).find(selector, timeout=3)
-                        if ele:
-                            ele.click()
-                            time.sleep(1)
-                            logger.debug("[CMD] 新建对话完成")
-                            return "new_chat_clicked"
-                        else:
-                            logger.warning("[CMD] 新建对话按钮未找到")
-                            return "new_chat_button_not_found"
-                    else:
-                        logger.warning("[CMD] 未配置新建对话按钮选择器（new_chat_btn）")
-                        return "new_chat_selector_missing"
-            except Exception as e:
-                logger.warning(f"[CMD] 新建对话失败: {e}")
-                return f"new_chat_failed: {e}"
+    def _action_abort_task(self, action: Dict, session: "TabSession") -> Any:
+        """处理 "abort_task" 动作。
 
-        elif action_type == "run_js":
-            code = action.get("code", "")
-            if code:
-                try:
-                    result = self._run_command_js(tab, code)
-                    retry_on_results = action.get("retry_on_results", [])
-                    if isinstance(retry_on_results, str):
-                        retry_on_results = [
-                            item.strip() for item in retry_on_results.split(",") if item.strip()
-                        ]
-                    elif not isinstance(retry_on_results, list):
-                        retry_on_results = []
+        从 _execute_action 的 if/elif 派发链中原样提出，方法体与
+        提取前逐字节相同（仅缩进变化），为下一步改为注册表做准备。
+        """
+        result = self._execute_abort_task(action, session)
+        if bool(action.get("stop_actions", True)):
+            raise CommandFlowAbort("abort_task_triggered")
+        return result
 
-                    try:
-                        retry_attempts = max(0, int(action.get("retry_attempts", 0)))
-                    except Exception:
-                        retry_attempts = 0
+    def _action_release_tab_lock(self, action: Dict, session: "TabSession") -> Any:
+        """处理 "release_tab_lock" 动作。
 
-                    retry_after_refresh = bool(action.get("retry_after_refresh", False))
-                    try:
-                        retry_wait_seconds = max(0.0, float(action.get("retry_wait_seconds", 0)))
-                    except Exception:
-                        retry_wait_seconds = 0.0
+        从 _execute_action 的 if/elif 派发链中原样提出，方法体与
+        提取前逐字节相同（仅缩进变化），为下一步改为注册表做准备。
+        """
+        result = self._execute_release_tab_lock(action, session)
+        if bool(action.get("stop_actions", True)):
+            raise CommandFlowAbort("release_tab_lock_triggered")
+        return result
 
-                    attempt = 0
-                    while attempt < retry_attempts and str(result) in retry_on_results:
-                        attempt += 1
-                        logger.info(
-                            f"[CMD] JS 命中重试条件: 返回值={result}, "
-                            f"第 {attempt}/{retry_attempts} 次, 刷新后重试={retry_after_refresh}"
-                        )
-                        if retry_after_refresh:
-                            try:
-                                tab.refresh()
-                                try:
-                                    self.notify_tab_navigated(session, reason="action_run_js_retry_refresh")
-                                except Exception:
-                                    pass
-                                time.sleep(2)
-                            except Exception as refresh_error:
-                                logger.warning(f"[CMD] JS 重试前刷新失败: {refresh_error}")
-                                break
-                        if retry_wait_seconds > 0:
-                            time.sleep(retry_wait_seconds)
-                        result = self._run_command_js(tab, code)
-                    logger.debug(f"[CMD] JS 执行完成: {str(result)[:100]}")
 
-                    # 当 JS 返回假值（None/""/False/0）时，视为执行未成功，
-                    # 返回 {ok: False} 以便 page_check 触发器重置 latch 并重试。
-                    # 默认开启；如 JS 本身就应返回假值，用户可在动作中设置 fail_on_falsy: false
-                    fail_on_falsy = action.get("fail_on_falsy", True)
-                    if fail_on_falsy and not result:
-                        logger.info(f"[CMD] JS 返回假值，按 fail_on_falsy 记为失败: {result!r}")
-                        return {"ok": False, "js_result": result, "reason": "falsy_result"}
+    def _execute_action(self, action: Dict, session: 'TabSession') -> Any:
+        """按 action_type 分派到对应的动作处理器。
 
-                    return result
-                except Exception as e:
-                    logger.warning(f"[CMD] JS 执行失败: {e}")
-                    return f"js_failed: {e}"
-            return ""
-
-        elif action_type == "run_js_file":
-            file_path = action.get("file_path", "")
-            encoding = str(action.get("encoding", "utf-8-sig") or "utf-8-sig").strip() or "utf-8-sig"
-            try:
-                resolved_path, code = self._load_action_text_file(file_path, encoding=encoding)
-            except Exception as e:
-                logger.warning(f"[CMD] JS 文件读取失败: path={file_path!r}, error={e}")
-                return f"js_file_read_failed: {e}"
-
-            if not code.strip():
-                logger.warning(f"[CMD] JS 文件为空: {resolved_path}")
-                return "js_file_empty"
-
-            inject_on_new_document = self._coerce_action_bool(
-                action.get("inject_on_new_document", True),
-                True,
-            )
-            apply_now = self._coerce_action_bool(action.get("apply_now", True), True)
-            registry = self._ensure_command_init_script_registry(session)
-            registry_key = resolved_path.lower()
-            registry_entry = registry.get(registry_key) if isinstance(registry.get(registry_key), dict) else None
-            script_identifier = ""
-
-            if inject_on_new_document:
-                try:
-                    previous_identifier = str((registry_entry or {}).get("identifier", "") or "").strip()
-                    previous_source = str((registry_entry or {}).get("source", "") or "")
-                    if previous_identifier and previous_source and previous_source != code:
-                        try:
-                            driver_for_tab(tab).run_cdp(
-                                "Page.removeScriptToEvaluateOnNewDocument",
-                                identifier=previous_identifier,
-                                _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
-                            )
-                        except Exception as remove_error:
-                            logger.debug(f"[CMD] 旧 JS 预注入脚本移除失败（忽略）: {remove_error}")
-                        previous_identifier = ""
-
-                    if not previous_identifier or previous_source != code:
-                        result = driver_for_tab(tab).run_cdp(
-                            "Page.addScriptToEvaluateOnNewDocument",
-                            source=code,
-                            _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
-                        )
-                        if isinstance(result, dict):
-                            script_identifier = str(
-                                result.get("identifier")
-                                or result.get("scriptId")
-                                or result.get("id")
-                                or ""
-                            ).strip()
-                        elif result not in (None, ""):
-                            script_identifier = str(result).strip()
-                        registry[registry_key] = {
-                            "identifier": script_identifier,
-                            "source": code,
-                            "path": resolved_path,
-                        }
-                    else:
-                        script_identifier = previous_identifier
-                except Exception as e:
-                    logger.warning(f"[CMD] JS 文件预注入失败: path={resolved_path}, error={e}")
-                    return f"js_file_preinject_failed: {e}"
-
-            run_result = None
-            if apply_now:
-                try:
-                    run_result = self._run_command_js(tab, code)
-                except Exception as e:
-                    logger.warning(f"[CMD] JS 文件执行失败: path={resolved_path}, error={e}")
-                    return f"js_file_run_failed: {e}"
-
-            fail_on_falsy = action.get("fail_on_falsy", False)
-            if apply_now and fail_on_falsy and not run_result:
-                logger.info(f"[CMD] JS 文件返回假值，按 fail_on_falsy 记为失败: {run_result!r}")
-                return {"ok": False, "js_result": run_result, "reason": "falsy_result"}
-
-            result_payload = {
-                "ok": True,
-                "path": resolved_path,
-                "applied_now": apply_now,
-                "inject_on_new_document": inject_on_new_document,
-                "script_id": script_identifier,
-                "result": run_result,
-            }
-            logger.debug(
-                f"[CMD] JS 文件已处理: path={resolved_path}, apply_now={apply_now}, "
-                f"inject_on_new_document={inject_on_new_document}, script_id={script_identifier or '-'}"
-            )
-            return result_payload
-
-        elif action_type == "wait":
-            seconds = float(action.get("seconds", 1))
-            time.sleep(seconds)
-            logger.debug(f"[CMD] 等待 {seconds}秒")
-            return f"waited:{seconds}"
-
-        elif action_type in {"execute_preset", "switch_preset"}:
-            return self._execute_preset_action(action, session)
-
-        elif action_type == "write_element":
-            return self._execute_write_element_action(action, session)
-
-        elif action_type == "read_element":
-            return self._execute_read_element_action(action, session)
-
-        elif action_type == "click_element":
-            selector = action.get("selector", "")
-            if selector:
-                try:
-                    ele = driver_for_tab(tab).find(selector, timeout=3)
-                    if ele:
-                        # 获取当前站点的 stealth 配置
-                        config_engine = self._get_config_engine()
-                        site_cfg = config_engine._get_site_data(
-                            self._get_session_domain(session),
-                            session.preset_name
-                        )
-                        is_stealth = site_cfg.get("stealth", False) if site_cfg else False
-                        
-                        if is_stealth:
-                            logger.debug(f"[CMD] 准备低熵模式点击元素: {selector}")
-                            # 尝试通过 JS 获取元素中心坐标
-                            rect = as_element(ele).run_js(
-                                "const r = this.getBoundingClientRect();"
-                                "return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}"
-                            )
-                            click_x_raw = rect.get('x') if isinstance(rect, dict) else None
-                            click_y_raw = rect.get('y') if isinstance(rect, dict) else None
-                            if click_x_raw is not None and click_y_raw is not None:
-                                click_x = int(click_x_raw) + __import__('random').randint(-4, 4)
-                                click_y = int(click_y_raw) + __import__('random').randint(-4, 4)
-                                from app.utils.human_mouse import cdp_precise_click, smooth_move_mouse
-                                # 平滑移动到坐标再进行精确按压
-                                smooth_move_mouse(tab, (click_x - 50, click_y - 50), (click_x, click_y))
-                                time.sleep(__import__('random').uniform(0.05, 0.15))
-                                success = cdp_precise_click(tab, click_x, click_y)
-                                if success:
-                                    logger.debug(f"[CMD] 元素已低熵点击: {selector} at ({click_x}, {click_y})")
-                                    return f"element_stealth_clicked:{selector}"
-                                else:
-                                    logger.warning(f"[CMD] 元素低熵点击事件派发失败: {selector}")
-                                    return f"element_stealth_click_failed:{selector}"
-                            else:
-                                logger.warning(f"[CMD] 低熵点击无法获取目标坐标，取消普通点击降级: {selector}")
-                                return f"element_stealth_click_unavailable:{selector}"
-                        else:
-                            ele.click()
-                            time.sleep(1)
-                            logger.debug(f"[CMD] 元素已点击: {selector}")
-                            return f"element_clicked:{selector}"
-                    else:
-                        logger.warning(f"[CMD] 待点击的元素未找到: {selector}")
-                        return f"element_not_found:{selector}"
-                except Exception as e:
-                    logger.warning(f"[CMD] 点击元素失败: {e}")
-                    return f"click_element_failed:{e}"
-            return "click_element_skipped_no_selector"
-
-        elif action_type == "click_captcha_challenge":
-            return self._execute_captcha_challenge_click_action(action, session)
-
-        elif action_type == "click_coordinates":
-            try:
-                x = int(action.get("x", 0))
-                y = int(action.get("y", 0))
-                from app.utils.human_mouse import cdp_precise_click
-                # cdp_precise_click handles its own debug logging and execution securely via CDP
-                success = cdp_precise_click(tab, x, y)
-                if success:
-                    time.sleep(0.5)
-                    logger.debug(f"[CMD] 坐标已点击: ({x}, {y})")
-                    return f"coordinates_clicked:({x},{y})"
-                else:
-                    logger.warning(f"[CMD] 坐标点击失败: ({x}, {y})")
-                    return f"coordinates_click_failed:({x},{y})"
-            except Exception as e:
-                logger.warning(f"[CMD] 坐标点击失败，参数异常: {e}")
-                return f"click_coordinates_failed:{e}"
-
-        elif action_type == "execute_workflow":
-            return self._execute_workflow_action(action, session)
-
-        elif action_type == "navigate":
-            url = self._render_template(action.get("url", ""), self._build_template_context(session)).strip()
-            if url:
-                try:
-                    tab.get(url)
-                    try:
-                        self.notify_tab_navigated(session, reason="action_navigate")
-                    except Exception:
-                        pass
-                    time.sleep(2)
-                    logger.debug(f"[CMD] 已导航到: {url}")
-                    return f"navigated:{url}"
-                except Exception as e:
-                    logger.warning(f"[CMD] 导航失败: {e}")
-                    return f"navigate_failed:{e}"
-            return "navigate_skipped"
-
-        elif action_type == "http_request":
-            return self._execute_http_request_action(action, session)
-
-        elif action_type == "append_file":
-            return self._execute_append_file_action(action, session)
-
-        elif action_type == "switch_proxy":
-            return self._execute_switch_proxy(action, session)
-
-        elif action_type == "send_webhook":
-            return self._execute_webhook_action(action, session)
-
-        elif action_type == "send_napcat":
-            return self._execute_napcat_action(action, session)
-
-        elif action_type == "execute_command_group":
-            return self._execute_command_group_action(action, session)
-
-        elif action_type == "abort_task":
-            result = self._execute_abort_task(action, session)
-            if bool(action.get("stop_actions", True)):
-                raise CommandFlowAbort("abort_task_triggered")
-            return result
-
-        elif action_type == "release_tab_lock":
-            result = self._execute_release_tab_lock(action, session)
-            if bool(action.get("stop_actions", True)):
-                raise CommandFlowAbort("release_tab_lock_triggered")
-            return result
-
-        else:
+        原为 416 行的 if/elif 链（CC 123），现改为查 _ACTION_HANDLERS 表。
+        """
+        action_type = action.get("type", "")
+        # 不能无条件查表：action_type 可能是不可哈希的对象（如 dict），
+        # 原 if/elif 链只会全部比较失败后落到 else，而 dict 查找会抛
+        # TypeError。先做类型判断以保持原有行为。
+        handler_name = _ACTION_HANDLERS.get(action_type) if isinstance(action_type, str) else None
+        if handler_name is None:
             logger.warning(f"[CMD] 未知动作类型: {action_type}")
             return {"ok": False, "error": f"unknown_action_type:{action_type or '(empty)'}"}
+        return getattr(self, handler_name)(action, session)
 
     def _execute_preset_action(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
         """执行预设动作，兼容旧版 switch_preset。"""
@@ -2102,7 +2171,7 @@ return (() => {
 
     def _execute_webhook_action(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
         if not HAS_REQUESTS:
-            logger.error("[CMD] send_webhook 需要 requests 库，请运行: pip install requests")
+            logger.error("[CMD] send_webhook 需要 requests 库，请运行: uv sync")
             return {"ok": False, "error": "requests_not_installed"}
 
         ctx = self._build_template_context(session)
@@ -2166,7 +2235,7 @@ return (() => {
 
     def _execute_napcat_action(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
         if not HAS_REQUESTS:
-            logger.error("[CMD] send_napcat 需要 requests 库，请运行: pip install requests")
+            logger.error("[CMD] send_napcat 需要 requests 库，请运行: uv sync")
             return {"ok": False, "error": "requests_not_installed"}
 
         ctx = self._build_template_context(session)
@@ -2292,7 +2361,7 @@ return (() => {
         执行代理节点切换（通过 Clash API）
         """
         if not HAS_REQUESTS:
-            logger.error("[CMD] 切换代理需要 requests 库，请运行: pip install requests")
+            logger.error("[CMD] 切换代理需要 requests 库，请运行: uv sync")
             return {"ok": False, "error": "requests_not_installed"}
 
         # 读取配置
@@ -2678,6 +2747,7 @@ return (() => {
 
         if lang == "python":
             import json as json_module
+
             from app.services.request_manager import request_manager
 
             initial_request_ids = []

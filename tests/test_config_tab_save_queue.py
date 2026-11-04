@@ -1,10 +1,9 @@
 import subprocess
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_TAB_FILE = ROOT / "static/js/components/ConfigTab.js"
-from tests._dashboard_js import dashboard_methods_bundle  # noqa: E402
+from tests._dashboard_js import dashboard_methods_bundle
 
 DASHBOARD_METHODS_FILE = dashboard_methods_bundle()  # R2-8：拆分后的完整源码
 

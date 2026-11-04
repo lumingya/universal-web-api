@@ -2,7 +2,7 @@
 app/core/config_parts/log_redaction.py - 日志敏感信息过滤与脱敏模块
 """
 import re
-from typing import Any, Match, Optional
+from typing import Any, Match
 
 _SENSITIVE_KEY_HINTS = (
     "authorization",

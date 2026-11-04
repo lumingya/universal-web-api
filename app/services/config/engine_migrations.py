@@ -4,19 +4,21 @@
 实例状态都在 ConfigEngine.__init__（engine.py）里初始化。
 """
 
+import copy
 import json
 import os
-import copy
-from typing import Dict, List, Any
+from typing import Any, Dict, List
+
 from app.models.schemas import (
     PRESET_ADVANCED_FIELDS,
     SITE_ADVANCED_FIELDS,
-    get_default_image_extraction_config,
     get_default_file_paste_config,
+    get_default_image_extraction_config,
     get_default_prompt_padding_config,
 )
 from app.utils.site_rules import get_site_rule
-from .engine_common import ConfigConstants, DEFAULT_PRESET_NAME, PRESET_FIELDS, logger
+
+from .engine_common import DEFAULT_PRESET_NAME, PRESET_FIELDS, ConfigConstants, logger
 
 
 class ConfigMigrationsMixin:
@@ -29,7 +31,7 @@ class ConfigMigrationsMixin:
             return []
 
         try:
-            with open(commands_file, "r", encoding="utf-8") as f:
+            with open(commands_file, encoding="utf-8") as f:
                 data = json.load(f)
 
             if isinstance(data, dict):

@@ -5,15 +5,15 @@ import json
 import threading
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 
 class SSEFormatter:
     """SSE 响应格式化器"""
-    
+
     _sequence = 0
     _sequence_lock = threading.Lock()
-    
+
     @classmethod
     def _generate_id(cls) -> str:
         timestamp = int(time.time() * 1000)
@@ -22,7 +22,7 @@ class SSEFormatter:
             seq = cls._sequence
         short_uuid = uuid.uuid4().hex[:6]
         return f"chatcmpl-{timestamp}-{seq}-{short_uuid}"
-    
+
     @classmethod
     def pack_chunk(
         cls,
@@ -60,7 +60,7 @@ class SSEFormatter:
         if media is not None:
             data["media"] = media
         return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-    
+
     @classmethod
     def pack_finish(cls, model: str = "web-browser") -> str:
         data = {
@@ -94,7 +94,7 @@ class SSEFormatter:
             model=model,
             completion_id=completion_id,
         )
-    
+
     @staticmethod
     def pack_error(
         message: str,
@@ -165,7 +165,7 @@ class SSEFormatter:
             "error": error
         }
         return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-    
+
     @staticmethod
     def pack_error_json(
         message: str,
@@ -224,7 +224,7 @@ class SSEFormatter:
                     error[k] = v
 
         return {"error": error}
-    
+
     @staticmethod
     def pack_non_stream(content: str, model: str = "web-browser", media: list | None = None) -> Dict:
         message = {
@@ -276,14 +276,14 @@ class SSEFormatter:
         打包携带图片的 SSE chunk。
 
         为保持 OpenAI 兼容性，图片会转成 Markdown 内容，而不是放进 delta.images。
-        
+
         Args:
             images: 图片数据列表，每项符合 ImageData 格式
             completion_id: 补全 ID
-        
+
         Returns:
             SSE 格式的字符串
-        
+
         Example:
             >>> chunk = SSEFormatter.pack_images_chunk([{"kind": "url", "url": "..."}])
         """

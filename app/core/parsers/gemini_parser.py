@@ -16,8 +16,8 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import logger
-from .base import ResponseParser
 
+from .base import ResponseParser
 
 # ----------------------------------------------------------
 # 私有工具
@@ -493,7 +493,7 @@ class GeminiParser(ResponseParser):
         """
         解析 Gemini 的 *增量* HTTP body 片段，返回 (完整文本, 完整思考过程, 是否结束)
         """
-        combined = f"{self._pending_raw}{str(raw_text or '')}"
+        combined = f"{self._pending_raw}{raw_text or ''!s}"
         if not combined:
             return None, None, False
 
@@ -671,7 +671,7 @@ class GeminiParser(ResponseParser):
         return any(cls._iter_generated_image_urls(raw_response))
 
     def _extract_generated_images_from_increment(self, new_data: str) -> List[Dict[str, Any]]:
-        scan_text = f"{self._media_scan_tail}{str(new_data or '')}"
+        scan_text = f"{self._media_scan_tail}{new_data or ''!s}"
         images = self._extract_generated_images(scan_text)
         self._media_scan_tail = self._build_media_scan_tail(scan_text)
         return images

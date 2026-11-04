@@ -6,42 +6,44 @@ validation.  Callers outside Arena should never enable these rules.
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import uuid
 from dataclasses import dataclass
-from io import BytesIO
-from pathlib import Path
 from typing import Any, Iterable, Optional
 from urllib.parse import urlsplit
 
 from app.core.config import logger
+from app.core.driver import driver_for_tab
 from app.utils.image_validation import (
     extract_media_item_bytes as _common_extract_media_item_bytes,
+)
+from app.utils.image_validation import (
     get_current_page_url as current_page_url,
+)
+from app.utils.image_validation import (
     image_signatures,
     read_image_bytes,
     read_local_image_bytes,
-    read_uploaded_image_bytes as _common_read_uploaded_image_bytes,
     same_image,
+)
+from app.utils.image_validation import (
+    read_uploaded_image_bytes as _common_read_uploaded_image_bytes,
+)
+from app.utils.image_validation import (
     validate_generated_images as _common_validate_generated_images,
 )
-from app.core.driver import driver_for_tab
-
 
 ARENA_NATIVE_STOP_SELECTOR = 'css:button[aria-label="Stop generation"]'
-ARENA_PROMPT_REJECTED_CODE = "arena_prompt_rejected"
-ARENA_IMAGE_GENERATION_FAILED_CODE = "arena_image_generation_failed"
-ARENA_IMAGE_UNCHANGED_CODE = "arena_image_unchanged"
-ARENA_RESULT_BASELINE_PROPERTY = "__universalProxyArenaResultBaseline"
-ARENA_NON_RETRYABLE_CODES = frozenset(
-    {
-        ARENA_PROMPT_REJECTED_CODE,
-        ARENA_IMAGE_GENERATION_FAILED_CODE,
-        ARENA_IMAGE_UNCHANGED_CODE,
-    }
+# 错误码常量已下沉到 app.core.error_codes（叶子模块，用于断开 core<->services 导入环）；
+# 此处再导出以保证既有 import 路径仍可用。
+from app.core.error_codes import (
+    ARENA_IMAGE_GENERATION_FAILED_CODE,
+    ARENA_IMAGE_UNCHANGED_CODE,
+    ARENA_NON_RETRYABLE_CODES,
+    ARENA_PROMPT_REJECTED_CODE,
 )
+
+ARENA_RESULT_BASELINE_PROPERTY = "__universalProxyArenaResultBaseline"
 
 _IMAGE_PROMPT_MARKERS = (
     "生成图片",
@@ -936,7 +938,6 @@ def validate_generated_images(
 
 
 from app.services.arena_image_stream_observer import ArenaImageStreamObserver
-
 
 __all__ = [
     "ARENA_IMAGE_GENERATION_FAILED_CODE",

@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "arena/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# Windows runner 在 CI 里把 stdout 重定向到管道时，默认用本地代码页（cp1252）编码，
+# 而这个项目的日志大量输出中文 → UnicodeEncodeError 会直接把 pytest 打崩。
+# 强制 UTF-8 让三个作业在两个平台上行为一致。
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
+
+jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      # 注意：ruff 在 [dependency-groups].dev 里，用 --no-dev 会把它排除，
+      # 随后 `uv run --no-sync ruff` 直接以“找不到命令”退出（exit code 2）。
+      - run: uv sync --frozen
+      - run: uv run --no-sync ruff check .
+
+  test:
+    name: pytest (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      # 只跑无需真实浏览器/已登录站点的子集；browser / real_browser 用例由本地或
+      # 夜间任务执行（见 tests/manual/README.md 与 pyproject 的 markers）。
+      # 统一用 bash（Windows runner 也带 Git Bash），这样 tee/pipefail 的行为一致，
+      # 且即使 pytest 在收集阶段就崩了，也能把原始输出留给下面的注解步骤。
+      - name: pytest
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --no-sync pytest -q -m "not browser and not real_browser" \
+            --junitxml="$RUNNER_TEMP/pytest-report.xml" 2>&1 | tee "$RUNNER_TEMP/pytest.log"
+        env:
+          # 干净克隆下依赖本地私有资源的用例由 conftest.py 自动 skip；
+          # 这里显式关闭真实浏览器测试，避免 CI 试图下载 Chromium。
+          UWAPI_SKIP_REAL_BROWSER: "1"
+      # 失败时把具体用例名转成 GitHub 注解，便于在 Actions 页与 API 上直接定位
+      # （日志下载在部分网络环境下不可用）。
+      - name: 汇总失败用例
+        if: failure()
+        run: uv run --no-sync python scripts/ci_report_failures.py "$RUNNER_TEMP/pytest-report.xml" "$RUNNER_TEMP/pytest.log"
+
+  structure:
+    name: 结构与产物一致性
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      # .env.example 是否与 settings_registry 同步、版本号是否一致、仓库卫生
+      - run: uv run --no-sync pytest -q tests/test_structure.py tests/test_settings_registry.py tests/test_repo_hygiene.py tests/test_uv_environment.py
+      # 导入环棘轮：环中模块数/环数/最大纠缠分量只减不增（见 docs/plans/REFACTOR_PLAN-2026-10.md 步骤 0）
+      # 分层棘轮：core→services、utils→core 的反向依赖只减不增（步骤 4）
+      # 类型检查棘轮：协议层 mypy 报错数只减不增（步骤 3）
+      - run: uv run --no-sync pytest -q tests/test_import_cycle_ratchet.py tests/test_layering_ratchet.py tests/test_typecheck_ratchet.py tests/test_exception_ratchet.py tests/test_driver_ratchet.py

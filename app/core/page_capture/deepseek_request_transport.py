@@ -8,10 +8,9 @@ import json
 from typing import Any, Dict
 
 from app.core.config import logger
-
-from .request_transport import register_page_request_transport
 from app.core.driver import driver_for_tab
 
+from .request_transport import register_page_request_transport
 
 DEEPSEEK_COMPLETION_PROFILE: Dict[str, Any] = {
     "id": "deepseek_completion",

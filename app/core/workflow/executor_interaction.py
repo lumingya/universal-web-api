@@ -7,12 +7,13 @@ app/core/workflow/executor_interaction.py - 工作流执行器页面交互 Mixin
 - 跨标签页并发点击的执行排队机制
 """
 
-import time
 import threading
+import time
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Optional
 
 from app.core.config import BrowserConstants, logger
+from app.core.driver import as_element, driver_for_tab
 from app.core.elements import ElementFinder
 from app.core.page_lifecycle import (
     BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -20,7 +21,6 @@ from app.core.page_lifecycle import (
     install_visibility_emulation,
     restore_visibility_emulation,
 )
-from app.core.driver import as_element, driver_for_tab
 
 
 class _PageInteractionGate:

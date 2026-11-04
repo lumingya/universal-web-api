@@ -61,9 +61,9 @@
         <div class="config-group">
             <h4><span class="icon">1️⃣</span> Recommended first-time flow</h4>
             <ol>
-                <li>After you run <code>start.bat</code>, first tell the two browser windows apart: the <strong>controlled browser used by the script</strong>, and the <strong>regular browser that shows this tutorial or that you use every day</strong>.</li>
-                <li>By default the controlled browser uses the project's <code>chrome_profile/</code>. On a first launch it is usually a blank, signed-out browser profile. If you did not already have a browser open, the script may also open a separate browser window for this tutorial, so it can look like two browsers appeared at once.</li>
-                <li>The window you should actually operate next is the <strong>controlled browser</strong>. Open the site you want to use there. For Gemini, a good starting URL is <code>https://gemini.google.com/</code>. Before the script starts handling requests, make sure that controlled browser contains only the target site, not search pages, tutorial pages, mail, or any unrelated tabs.</li>
+                <li>After you run <code>uv run python main.py</code>, first tell the two browser windows apart: the <strong>controlled browser launched by the project</strong>, and the <strong>regular browser that shows this tutorial or that you use every day</strong>.</li>
+                <li>By default the controlled browser uses the project's <code>chrome_profile/</code>. On a first launch it is usually a blank, signed-out browser profile. If you did not already have a browser open, the project may also open a separate browser window for this tutorial, so it can look like two browsers appeared at once.</li>
+                <li>The window you should actually operate next is the <strong>controlled browser</strong>. Open the site you want to use there. For Gemini, a good starting URL is <code>https://gemini.google.com/</code>. Before the service starts handling requests, make sure that controlled browser contains only the target site, not search pages, tutorial pages, mail, or any unrelated tabs.</li>
                 <li>Sign in on that site normally inside the controlled browser, and make sure you have reached the chat page.</li>
                 <li>For Gemini, make sure the left sidebar is expanded instead of collapsed. That makes it easier to match the later site configuration and API connection steps.</li>
                 <li>Once the site is open and signed in, come back to this tutorial and continue with the <strong>Connect API</strong> section below. Fill your client using the <code>Base URL</code>, <code>API Key</code>, and model examples there.</li>
@@ -1215,9 +1215,9 @@ Attached:
         <h3>DrissionPage patch (important)</h3>
         <p>This project applies a small DrissionPage patch so network monitoring can reuse the browser's main connection instead of opening extra ones, which improves compatibility.</p>
         <ul>
-            <li><strong>Automatic</strong>: <code>start.bat</code> applies the patch after dependency installation.</li>
-            <li><strong>Manual</strong>: <code>python patch_drissionpage.py</code></li>
-            <li><strong>Restore</strong>: <code>python patch_drissionpage.py --restore</code></li>
+            <li><strong>Automatic</strong>: <code>uv run python main.py</code> applies the patch before starting the service.</li>
+            <li><strong>Manual</strong>: <code>uv run python patch_drissionpage.py</code></li>
+            <li><strong>Restore</strong>: <code>uv run python patch_drissionpage.py --restore</code></li>
         </ul>
 
         <div class="note">
@@ -1466,7 +1466,7 @@ if session.error_count > 2:
                 <li>Close every Chrome window completely.</li>
                 <li>Create a dedicated directory such as <code>C:\\Users\\YourName\\AppData\\Local\\UniversalWebApiProfile</code>.</li>
                 <li>Copy at least <code>Local State</code> and the profile folder you want into that new directory.</li>
-                <li>Point the script to that copy in <code>.env</code> and restart <code>start.bat</code>.</li>
+                <li>Point the project to that copy in <code>.env</code> and restart <code>uv run python main.py</code>.</li>
             </ol>
 
             <pre><code>BROWSER_PATH=C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe

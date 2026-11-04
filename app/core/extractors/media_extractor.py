@@ -9,22 +9,23 @@ app/core/extractors/media_extractor.py - 多模态内容提取器
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import base64
 import hashlib
 import json
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from app.core.driver import as_element, driver_for_tab
+from app import paths
 from app.core.config import get_logger
+from app.core.driver import as_element, driver_for_tab
 from app.core.extractors.image_extractor import (
     get_default_image_extraction_config,
     image_extractor,
 )
-from app.models.schemas import is_modality_enabled, normalize_modalities_config, get_modality_policy
+from app.models.schemas import get_modality_policy, is_modality_enabled, normalize_modalities_config
 
 logger = get_logger("MEDIA_EXT")
 
@@ -2618,8 +2619,7 @@ class MediaExtractor:
         except (TypeError, ValueError):
             max_payload_bytes = 10 * 1024 * 1024
 
-        save_dir = Path("download_images")
-        save_dir.mkdir(exist_ok=True)
+        save_dir = paths.download_dir()
         deadline = time.time() + timeout_seconds
         best_event: Dict[str, Any] = {}
         best_size = 0
@@ -2687,7 +2687,7 @@ class MediaExtractor:
                     related_count += 1
                     summaries.append(
                         (
-                            f"{str(item.get('transport') or '')}:{str(item.get('dir') or '')}:"
+                            f"{item.get('transport') or ''!s}:{item.get('dir') or ''!s}:"
                             f"status={item.get('status')}:"
                             f"content_type={content_type[:48]!r}:"
                             f"url={url[:120]!r}"

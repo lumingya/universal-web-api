@@ -1,9 +1,11 @@
 """Ordered multi-case control flow uses the same bounded runtime, no extra executor."""
 import copy
+
 import pytest
+
+from app.core.config import WorkflowCancelledError, WorkflowError
 from app.core.workflow.flow_runtime import FlowProgram, FlowValidationError, validate_workflow
 from app.core.workflow.preview import preview_workflow
-from app.core.config import WorkflowCancelledError, WorkflowError
 
 
 def route(cases=None, default=None):
@@ -85,8 +87,9 @@ def test_cancel_before_switch_prevents_case_execution():
 
 
 def test_page_fetch_skip_is_contained_inside_case():
-    from app.core.workflow.executor import WorkflowExecutor
     from unittest.mock import MagicMock
+
+    from app.core.workflow.executor import WorkflowExecutor
     node=route(cases=[{'condition':{'left':True,'op':'eq','right':True},'steps':[{'action':'PAGE_FETCH'},{'action':'FILL_INPUT'},{'action':'KEY_PRESS','target':'Enter'},{'action':'STREAM_WAIT'}]}],default=[{'action':'CLICK','target':'send_btn'}])
     program=FlowProgram([node]);index=program.next_leaf(0)
     executor=WorkflowExecutor(tab=MagicMock())
@@ -140,8 +143,9 @@ def test_documented_example_can_be_imported_and_simulated(state,clicks):
 
 
 def test_preset_save_accepts_switch_and_rejects_bad_nested_branch_atomically():
-    from app.api.config_route_models import _normalize_preset_config_payload
     from fastapi import HTTPException
+
+    from app.api.config_route_models import _normalize_preset_config_payload
     payload={'selectors':{},'workflow':[route()],'custom_metadata':{'preserve':True},'stealth':False}
     assert _normalize_preset_config_payload(payload)==payload
     bad=copy.deepcopy(payload);bad['workflow'][0]['value']['default']=[{'action':'NOT_AN_ACTION'}]

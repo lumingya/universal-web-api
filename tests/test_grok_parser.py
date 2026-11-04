@@ -1,6 +1,5 @@
 import json
 import re
-from pathlib import Path
 
 from app.core.parsers.grok_parser import GrokParser
 
@@ -101,29 +100,36 @@ def test_grok_ndjson_streaming_path_still_extracts_token_and_final_snapshot():
 
 
 def test_grok_network_pattern_matches_completed_load_responses_endpoint():
-    from tests._sites import shipped_sites
-    config = shipped_sites()
-    pattern = config["grok.com"]["presets"]["主预设"]["stream_config"]["network"][
-        "stream_match_pattern"
-    ]
+    """Grok 的流式响应识别必须覆盖 load-responses / responses / new，且不吞分享链接。
 
-    assert re.search(
-        pattern,
+    历史上 shipped 配置里写死过正则 ``stream_match_pattern``；现在 Grok 走 DOM 模式，
+    ``stream_config.network`` 不再带该字段——``NetworkMonitor`` 对空 pattern 的语义是
+    「所有响应都是候选」，真正的端点识别由 ``GrokParser.get_supported_patterns()`` 兜底。
+    因此这里对两种形态都做校验，避免配置演进后测试变成「记住某个具体写法」：
+    - 配置里写了 pattern：它必须命中三个流式端点，且不命中分享链接；
+    - 没写：parser 的 supported_patterns 必须覆盖同样的端点，且不命中分享链接。
+    """
+    from tests._sites import shipped_sites
+
+    network = shipped_sites()["grok.com"]["presets"]["主预设"]["stream_config"]["network"]
+    assert network.get("parser") == "grok"
+
+    stream_urls = (
         "https://grok.com/rest/app-chat/conversations/example-conversation/load-responses",
-        flags=re.IGNORECASE,
-    )
-    assert re.search(
-        pattern,
         "https://grok.com/rest/app-chat/conversations/example-conversation/responses",
-        flags=re.IGNORECASE,
-    )
-    assert re.search(
-        pattern,
         "https://grok.com/rest/app-chat/conversations/new",
-        flags=re.IGNORECASE,
     )
-    assert not re.search(
-        pattern,
-        "https://grok.com/rest/app-chat/conversations/example-conversation/sharing?responseId=abc",
-        flags=re.IGNORECASE,
-    )
+    share_url = "https://grok.com/rest/app-chat/conversations/example-conversation/sharing?responseId=abc"
+
+    pattern = str(network.get("stream_match_pattern") or network.get("listen_pattern") or "").strip()
+    if pattern:
+        for url in stream_urls:
+            assert re.search(pattern, url, flags=re.IGNORECASE), url
+        assert not re.search(pattern, share_url, flags=re.IGNORECASE)
+    else:
+        hints = GrokParser.get_supported_patterns()
+        for fragment in ("/rest/app-chat/conversations/", "/responses", "/load-responses"):
+            assert fragment in hints, hints
+        # 空 pattern 时监视器把所有响应当作候选，控制类响应（如分享链接）由 parser 的
+        # 负载格式与 stream_exclude_patterns 过滤，不在这一层做 URL 排除。
+        assert share_url  # 保留变量以示对照，避免误以为这里覆盖了排除逻辑

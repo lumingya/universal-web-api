@@ -1,6 +1,7 @@
 """Backward-compatible image entry point; all attachments share one coordinator."""
 import mimetypes
 import time
+
 from .attachment_upload import AttachmentUploadCoordinator
 
 

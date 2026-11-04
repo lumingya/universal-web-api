@@ -1,7 +1,8 @@
 """Refresh the offline CSS bundle after editing static/css/workflow-studio.css."""
-from pathlib import Path
 import json
 import re
+from pathlib import Path
+
 root = Path(__file__).resolve().parents[1]
 script = root / 'static/js/workflow-studio.js'
 css = (root / 'static/css/workflow-studio.css').read_text(encoding='utf-8')

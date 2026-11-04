@@ -1,30 +1,26 @@
 """
 app/core/config_parts/secure_logger.py - 安全日志器实现与日志工厂模块
 """
-from collections import defaultdict
 import contextlib
 import contextvars
 import logging
 import sys
 import threading
 import time
+from collections import defaultdict
 from typing import Any, Dict, Optional
 
-from .env_config import AppConfig
 from .browser_constants import _BrowserConstantEnabledFilter
+from .cute_translator import (
+    _add_suppressed_marker,
+)
+from .env_config import AppConfig
 from .log_formatters import (
     _compact_logger_name,
     _ConsoleColorFormatter,
     _format_log_display_line,
     _web_log_handler,
     get_shared_file_log_handler,
-)
-from .cute_translator import (
-    _cuteify_info_message,
-    _cuteify_debug_message,
-    _cuteify_warning_message,
-    _cuteify_error_message,
-    _add_suppressed_marker,
 )
 
 # 上下文变量，存储当前请求的 request_id
@@ -43,7 +39,7 @@ class SecureLogger:
     """安全日志器，带图标和格式化（支持上下文自动注入 request_id）"""
     _debug_throttle_locks: Dict[str, threading.Lock] = defaultdict(threading.Lock)
     _debug_throttle_state: Dict[str, Dict[str, Any]] = {}
-    
+
     ICONS = {
         'DEBUG': '▫️',
         'INFO': '🔹',
@@ -53,7 +49,7 @@ class SecureLogger:
         'STREAM': '🌊',
         'NETWORK': '🌐',
     }
-    
+
     # 日志级别映射
     LEVEL_MAP = {
         'DEBUG': logging.DEBUG,
@@ -65,20 +61,20 @@ class SecureLogger:
 
     def __init__(self, name: str, level: Optional[int] = None):
         self._name = _compact_logger_name(name)
-        
+
         # 如果未指定级别，从环境变量获取
         if level is None:
             level = self._get_level_from_env()
-        
+
         self._level = level
         self._logger = self._setup_logger(name, level)
-    
+
     @classmethod
     def _get_level_from_env(cls) -> int:
         """从环境变量获取日志级别"""
         level_str = AppConfig.get_log_level()
         return cls.LEVEL_MAP.get(level_str, logging.INFO)
-    
+
     def _setup_logger(self, name: str, level: int) -> logging.Logger:
         logger = logging.getLogger(name)
 
@@ -230,13 +226,13 @@ class SecureLogger:
 
     def exception(self, msg: str):
         self._emit(logging.ERROR, 'ERROR', msg, exc_info=True)
-        
+
     def success(self, msg: str):
         self._emit(logging.INFO, 'SUCCESS', msg)
 
     def stream(self, msg: str):
         self._emit(logging.INFO, 'STREAM', msg)
-        
+
     def network(self, msg: str):
         self._emit(logging.INFO, 'NETWORK', msg)
 

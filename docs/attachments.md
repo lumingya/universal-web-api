@@ -122,9 +122,9 @@ Anthropic 文档：
 ## 测试
 
 ```bash
-python -m pip install -r requirements-dev.txt
-python -m playwright install --with-deps chromium
-python -m pytest -q tests/test_attachments.py tests/test_attachment_ui.py tests/test_attachment_browser.py
+uv sync
+uv run playwright install --with-deps chromium
+uv run pytest -q tests/test_attachments.py tests/test_attachment_ui.py tests/test_attachment_browser.py
 ```
 
 浏览器测试仅使用本地模拟 composer，不访问 AI 站点。缺少 Playwright 或浏览器时该文件会跳过；CI 若要求浏览器验证，应先安装上述依赖。

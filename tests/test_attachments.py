@@ -1,22 +1,21 @@
 """Contract, safety, resource lifetime and upload-side-effect regressions."""
 import base64
 import io
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from PIL import Image
 
-from app.utils import attachments as a
-from app.core.config import WorkflowError
-from app.core.workflow.attachment_upload import AttachmentUploadCoordinator, DispatchState
+from app.api.anthropic_routes import _anthropic_messages_to_openai
+from app.api.chat import _normalize_response_message_content
 from app.core.browser.prompt import BrowserPromptMixin
 from app.core.browser.workflow import BrowserWorkflowMixin
+from app.core.config import WorkflowError
+from app.core.workflow.attachment_upload import AttachmentUploadCoordinator, DispatchState
 from app.core.workflow.executor_request_transport import WorkflowExecutorRequestTransportMixin
-from app.api.chat import _normalize_response_message_content
-from app.api.anthropic_routes import _anthropic_messages_to_openai
 from app.services.config.engine import ConfigEngine
+from app.utils import attachments as a
 
 
 def data_uri(data=b"hello", mime="text/plain"):

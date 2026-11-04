@@ -10,20 +10,21 @@ chatgpt_parser.py - ChatGPT 响应解析器
 
 import json
 import re
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.core.config import logger
+
 from .base import ResponseParser
 
 
 class ChatGPTParser(ResponseParser):
     """
     ChatGPT API 响应解析器
-    
+
     URL 特征: /backend-api/f/conversation
     响应格式: SSE (text/event-stream) with v1 delta encoding
     """
-    
+
     def __init__(self):
         self._accumulated_content = ""
         self._last_raw_length = 0
@@ -50,7 +51,7 @@ class ChatGPTParser(ResponseParser):
             rf"{re.escape(self._ref_start)}[^{re.escape(self._ref_end)}]*$",
             re.DOTALL,
         )
-    
+
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         """
         解析SSE响应流（返回增量）
@@ -61,15 +62,15 @@ class ChatGPTParser(ResponseParser):
             "done": False,
             "error": None
         }
-        
+
         try:
             # 确保是字符串
             if isinstance(raw_response, bytes):
                 raw_response = raw_response.decode('utf-8', errors='ignore')
-            
+
             if not isinstance(raw_response, str):
                 raw_response = str(raw_response)
-            
+
             # 只处理新增部分；非前缀新快照会在 helper 内重置解析状态。
             new_data = self._prepare_incremental_raw_response(raw_response)
             if not new_data:
@@ -77,21 +78,21 @@ class ChatGPTParser(ResponseParser):
 
             # 解析新增的SSE事件
             delta_content, done = self._parse_sse_chunk(new_data)
-            
+
             if delta_content:
                 result["content"] = delta_content
                 self._accumulated_content += delta_content
-            
+
             # 检测结束标志
             if done:
                 result["done"] = True
-            
+
         except Exception as e:
             logger.debug(f"[ChatGPTParser] 解析异常: {e}")
             result["error"] = str(e)
-        
+
         return result
-    
+
     def _parse_sse_chunk(self, chunk: str) -> tuple[str, bool]:
         """解析SSE数据块，提取文本增量"""
         chunk = self._extract_complete_sse_chunk(chunk)
@@ -118,7 +119,7 @@ class ChatGPTParser(ResponseParser):
 
     def _extract_complete_sse_chunk(self, chunk: str) -> str:
         """Buffer partial SSE frames until a blank line terminates the event."""
-        combined = f"{self._pending_sse_chunk}{str(chunk or '')}"
+        combined = f"{self._pending_sse_chunk}{chunk or ''!s}"
         if not combined:
             return ""
 
@@ -166,7 +167,7 @@ class ChatGPTParser(ResponseParser):
                 continue
 
             yield current_event, payload
-    
+
     def _consume_event(self, event_name: Optional[str], data: Dict[str, Any]) -> None:
         self._update_media_generation_state(event_name, data)
         if event_name != "delta":
@@ -601,7 +602,7 @@ class ChatGPTParser(ResponseParser):
             prefix_len += 1
 
         return current[prefix_len:]
-    
+
     def reset(self):
         """重置状态"""
         self._accumulated_content = ""
@@ -624,19 +625,19 @@ class ChatGPTParser(ResponseParser):
         parse_result: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return dict(self._media_generation_state or {})
-    
+
     @classmethod
     def get_id(cls) -> str:
         return "chatgpt"
-    
+
     @classmethod
     def get_name(cls) -> str:
         return "ChatGPT API"
-    
+
     @classmethod
     def get_description(cls) -> str:
         return "解析 ChatGPT 的 API 响应（SSE流式，v1 delta编码）"
-    
+
     @classmethod
     def get_supported_patterns(cls) -> List[str]:
         return ["**/backend-api/f/conversation**"]

@@ -13,7 +13,6 @@ from app.services.arena_proxy_rotation import (
     rotate_arena_proxy,
 )
 
-
 COMMANDS_PATH = Path(__file__).parents[1] / "config" / "commands.json"
 
 
@@ -924,6 +923,7 @@ def test_arena_auto_battle_commands_script_imports():
 
 def test_sandbox_blocks_indirect_system_imports_and_network_module():
     import pytest
+
     from app.services.command_engine_actions import CommandEngineActionsMixin
     class _SandboxTester(CommandEngineActionsMixin):
         def _command_env_flag(self, k, default): return default

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from app.core.config import logger, WorkflowError
+from app.core.config import WorkflowError, logger
 from app.core.request_transport import (
     REQUEST_TRANSPORT_MODE_PAGE_FETCH,
     execute_request_transport,

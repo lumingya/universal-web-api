@@ -3,17 +3,24 @@
 import copy
 import json
 import time
-from typing import Optional, Dict, Any, Callable, get_args
+from typing import Any, Callable, Dict, Optional, get_args
 
 from fastapi import HTTPException
 
-from app.core.config import get_logger, WorkflowCancelledError
+from app.core.config import WorkflowCancelledError, get_logger
+from app.core.driver import driver_for_tab
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT, BACKGROUND_WAKE_JS_TIMEOUT
+from app.core.workflow.flow_runtime import (
+    FlowProgram,
+    FlowValidationError,
+    capture_page_state,
+    has_control_flow,
+    validate_inputs,
+    validate_workflow,
+)
 from app.models.schemas import ActionType
-from app.core.workflow.flow_runtime import (FlowProgram, FlowValidationError, validate_workflow, has_control_flow, capture_page_state, validate_inputs)
 from app.services.config_engine import config_engine
 from app.utils.site_url import extract_remote_site_domain
-from app.core.driver import driver_for_tab
 
 logger = get_logger('API.CONFIG.WORKFLOW')
 
@@ -552,8 +559,8 @@ def _scan_workflow_scripts() -> Dict[str, Any]:
 
 def _load_workflow_script_content(target_path: str) -> Dict[str, Any]:
     """加载指定脚本的内容与元数据（用于前端预览）"""
-    from app.core.workflow.script_loader import script_loader
     from app.core.config import WorkflowError
+    from app.core.workflow.script_loader import script_loader
 
     if not target_path:
         raise HTTPException(status_code=400, detail="缺少脚本路径参数")

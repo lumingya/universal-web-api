@@ -133,7 +133,7 @@ def _patch_parse_js_result() -> bool:
     if getattr(original, "_uwapi_release_wrapper", False):
         return True
 
-    def parse_js_result(page, ele, result, end_time):  # noqa: D401 - same signature
+    def parse_js_result(page, ele, result, end_time):
         object_id = _should_release(result)
         try:
             return original(page, ele, result, end_time)

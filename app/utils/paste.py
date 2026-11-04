@@ -7,10 +7,10 @@ app/utils/paste.py - 通用粘贴工具
 - 超长文本需要分块避免卡顿/被截断
 """
 
-import time
-import random
 import json
-from typing import Optional
+import random
+import time
+
 from app.core.config import get_logger
 from app.core.driver import driver_for_tab
 
@@ -85,14 +85,14 @@ window.getElementTextLength = function(element) {
 """
 
 
-def safe_universal_paste(page, selector: str, text_content: str, 
+def safe_universal_paste(page, selector: str, text_content: str,
                          chunk_size: int = 2000,
                          min_delay: float = 0.3,
                          max_delay: float = 0.8,
                          max_retries: int = 2) -> bool:
     """
     通用粘贴函数：无论目标是 textarea 还是 contenteditable div，都能正确追加文本
-    
+
     :param page: DrissionPage 对象
     :param selector: 输入框的选择器
     :param text_content: 要发送的完整文本
@@ -104,14 +104,14 @@ def safe_universal_paste(page, selector: str, text_content: str,
     """
     if not text_content:
         return True
-    
+
     # 注入通用 JS 函数
     try:
         driver_for_tab(page).run_js(UNIVERSAL_INSERT_JS)
     except Exception as e:
         logger.error(f"注入 JS 失败: {e}")
         return False
-    
+
     # 获取元素对象
     ele = driver_for_tab(page).find(selector)
     if not ele:
@@ -121,37 +121,36 @@ def safe_universal_paste(page, selector: str, text_content: str,
     # 分块逻辑
     total_length = len(text_content)
     chunks = [text_content[i:i+chunk_size] for i in range(0, total_length, chunk_size)]
-    
+
     logger.debug(f"开始粘贴，共 {len(chunks)} 块，总长度 {total_length}")
 
     total_sent = 0
-    
+
     for i, chunk in enumerate(chunks):
         success = False
-        
+
         for retry in range(max_retries + 1):
             try:
                 # 获取写入前的长度
                 before_len = driver_for_tab(page).run_js("return window.getElementTextLength(arguments[0])", ele)
                 before_len = before_len or 0
-                
+
                 # 安全转义文本，防止 JS 报错
                 safe_chunk = json.dumps(chunk)
-                
+
                 # 调用 JS 写入
-                result = driver_for_tab(page).run_js(f"return window.universalAppend(arguments[0], {safe_chunk})", ele)
-                
+                driver_for_tab(page).run_js(f"return window.universalAppend(arguments[0], {safe_chunk})", ele)
+
                 # 短暂等待让页面更新
                 time.sleep(0.05)
-                
+
                 # 获取写入后的长度
                 after_len = driver_for_tab(page).run_js("return window.getElementTextLength(arguments[0])", ele)
                 after_len = after_len or 0
-                
+
                 # 验证是否成功写入
-                expected_len = before_len + len(chunk)
                 actual_increase = after_len - before_len
-                
+
                 # 允许小幅误差（可能有换行符转换等）
                 if actual_increase >= len(chunk) * 0.95:
                     success = True
@@ -160,14 +159,14 @@ def safe_universal_paste(page, selector: str, text_content: str,
                     break
                 else:
                     logger.warning(f"第 {i+1} 块校验失败 (预期+{len(chunk)}，实际+{actual_increase})，重试 {retry+1}/{max_retries}")
-                    
+
             except Exception as e:
                 logger.warning(f"第 {i+1} 块写入异常: {e}，重试 {retry+1}/{max_retries}")
-        
+
         if not success:
             logger.error(f"第 {i+1} 块最终失败，已写入 {total_sent}/{total_length} 字符")
             return False
-        
+
         # 随机延时：模拟人类分段复制粘贴的思考时间
         if i < len(chunks) - 1:  # 最后一块不需要延时
             time.sleep(random.uniform(min_delay, max_delay))
@@ -184,7 +183,7 @@ def clear_and_paste(page, selector: str, text_content: str, **kwargs) -> bool:
     if not ele:
         logger.warning(f"找不到元素: {selector}")
         return False
-    
+
     # 清空内容
     try:
         driver_for_tab(page).run_js("""
@@ -199,7 +198,7 @@ def clear_and_paste(page, selector: str, text_content: str, **kwargs) -> bool:
         time.sleep(0.1)
     except Exception as e:
         logger.warning(f"清空失败: {e}")
-    
+
     return safe_universal_paste(page, selector, text_content, **kwargs)
 
 

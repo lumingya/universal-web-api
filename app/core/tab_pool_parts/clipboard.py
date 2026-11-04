@@ -1,6 +1,5 @@
 import threading
 
-
 _clipboard_lock = threading.Lock()
 
 

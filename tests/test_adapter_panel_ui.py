@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("playwright.sync_api")
 
-from tests._playwright import launch_chromium, sync_playwright  # noqa: E402
+from tests._playwright import launch_chromium, sync_playwright
 
 pytestmark = pytest.mark.browser
 ROOT = Path(__file__).resolve().parents[1]

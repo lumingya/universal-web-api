@@ -1,12 +1,10 @@
 # patch_drissionpage.py - 自动补丁 DrissionPage Listener
 # 用法：python patch_drissionpage.py
-# 时机：pip install 之后、项目启动之前
+# 时机：uv sync 之后、服务启动之前（main.py 启动引导会自动执行）
 
-import importlib
 import inspect
 import shutil
 from pathlib import Path
-from datetime import datetime
 
 RECOVERY_GUARD_MARKER = "# CODEX_LISTENER_RECOVERY_GUARD_V2"
 STREAM_CAPTURE_GUARD_MARKER = "# CODEX_LISTENER_STREAM_CAPTURE_V2"
@@ -774,13 +772,13 @@ def ensure_stream_capture_patch(content):
 def apply_patch(filepath):
     """应用补丁"""
     content = filepath.read_text(encoding='utf-8')
-    
+
     if check_already_patched(content):
         print("✅ 已经打过补丁，无需重复操作")
         return True
 
     base_patched = has_base_patch(content)
-    
+
     # 备份原文件
     backup = filepath.with_suffix('.py.bak')
     if not backup.exists():
@@ -799,12 +797,12 @@ def apply_patch(filepath):
             "        self._reuse_driver = False\n"
             "        self._network_enabled = False"
         )
-        
+
         if old_init_end not in content:
             print("❌ 无法定位 __init__ 补丁点")
             return False
         content = content.replace(old_init_end, new_init_end, 1)
-        
+
         # ===== 补丁 2：start() 支持复用 =====
         old_start = (
             "        self._driver = Driver(self._target_id, self._address)\n"
@@ -828,12 +826,12 @@ def apply_patch(filepath):
             "        self._set_callback()\n"
             "        self.listening = True"
         )
-        
+
         if old_start not in content:
             print("❌ 无法定位 start() 补丁点")
             return False
         content = content.replace(old_start, new_start, 1)
-        
+
         # ===== 补丁 3：stop() 复用模式不关闭连接 =====
         old_stop = (
             "    def stop(self):\n"
@@ -862,12 +860,12 @@ def apply_patch(filepath):
             "                self._driver.stop()\n"
             "                self._driver = None"
         )
-        
+
         if old_stop not in content:
             print("❌ 无法定位 stop() 补丁点")
             return False
         content = content.replace(old_stop, new_stop, 1)
-        
+
         # ===== 补丁 4：_to_target() 兼容复用模式 =====
         old_to_target = (
             "    def _to_target(self, target_id, address, owner):\n"
@@ -908,7 +906,7 @@ def apply_patch(filepath):
             "                self._driver.run('Network.enable')\n"
             "            self._set_callback()"
         )
-        
+
         if old_to_target not in content:
             print("⚠️ 无法定位 _to_target() 补丁点（非关键，跳过）")
         else:
@@ -948,24 +946,62 @@ def restore(filepath):
         return False
 
 
+def verify_patch(filepath) -> bool:
+    """写回后复核：确认三段守卫标记确实落在文件里。
+
+    ``apply_patch()`` 返回 True 只表示"写入成功"，并不保证补丁内容真的进去了
+    （例如注入点匹配到意外位置、写入被权限/杀软拦截、或 DrissionPage 升级后
+    源码结构变化导致锚点部分命中）。本函数把这些情况从**静默降级**变成
+    **明确失败**，由调用方决定是否继续启动。
+    """
+    try:
+        content = filepath.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"❌ 补丁后复核失败，无法重新读取文件: {exc}")
+        return False
+
+    missing = []
+    if not has_base_patch(content):
+        missing.append("基础复用补丁")
+    if not has_recovery_patch(content):
+        missing.append("监听恢复补丁")
+    if not has_stream_capture_patch(content):
+        missing.append("增量流捕获补丁")
+    if missing:
+        print(f"❌ 补丁后复核失败，以下内容未写入: {', '.join(missing)}")
+        return False
+    return True
+
+
 def main():
     import sys
-    
+
     filepath = find_listener_file()
     if not filepath:
-        return
-    
+        # 退出码 2：环境里根本没有 DrissionPage / 定位不到 Listener 源码，
+        # 与"找到了但补丁失败"（退出码 1）区分开，便于调用方给出准确提示。
+        sys.exit(2)
+
     print(f"📍 Listener 源码: {filepath}")
-    
+
     if len(sys.argv) > 1 and sys.argv[1] == '--restore':
         restore(filepath)
-        return
-    
-    if apply_patch(filepath):
-        print("\n🎉 补丁完成！")
-        print("   恢复命令: python patch_drissionpage.py --restore")
-    else:
+        sys.exit(0)
+
+    if not apply_patch(filepath):
         print("\n❌ 补丁失败，请将以上输出发给开发者")
+        sys.exit(1)
+
+    if not verify_patch(filepath):
+        print("\n❌ 补丁写入后复核未通过，网络监听模式不可用")
+        print("   常见原因：DrissionPage 版本升级后源码结构变化。")
+        print("   处理：删除 site-packages 中的 Listener.py 后重装 DrissionPage，")
+        print("        或固定到本补丁验证过的版本（见 docs/plans/REFACTOR_PLAN-2026-10.md 步骤 9）。")
+        sys.exit(1)
+
+    print("\n🎉 补丁完成！")
+    print("   恢复命令: python patch_drissionpage.py --restore")
+    sys.exit(0)
 
 
 if __name__ == '__main__':

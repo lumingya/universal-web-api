@@ -148,7 +148,7 @@ class AdapterUpdater:
     # ------------------------------------------------------------------ 应用
     def apply(self, sites: Optional[Iterable[str]] = None, *, include_conflicts: bool = False) -> Dict[str, Any]:
         """应用更新。``sites`` 为空时应用全部安全更新（update_available / new_site）。"""
-        from updater import merge_site_records  # 与更新器、迁移使用同一合并语义
+        from app.update.engine import merge_site_records  # 与更新器、迁移使用同一合并语义
 
         official_index = self._official_index()
         report = self.check()

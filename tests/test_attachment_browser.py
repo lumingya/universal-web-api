@@ -1,5 +1,5 @@
 """Optional real Chromium tests on a local synthetic composer (no AI/login/network).
-Install: pip install playwright (uses the local Chrome/Edge when Playwright's own Chromium is absent,
+Install: uv sync (uses the local Chrome/Edge when Playwright's own Chromium is absent,
 see tests/_playwright.py; or: python -m playwright install --with-deps chromium)
 """
 from pathlib import Path

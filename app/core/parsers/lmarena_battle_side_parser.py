@@ -12,8 +12,9 @@ import json
 from typing import Any, Dict, List
 
 from app.core.config import logger
+
 from .base import ResponseParser
-from .lmarena_parser import LmarenaParser, _CP1252_TO_LATIN1, _extract_arena_image_items
+from .lmarena_parser import _CP1252_TO_LATIN1, LmarenaParser, _extract_arena_image_items
 
 
 class _LmarenaBattleSideParser(ResponseParser):

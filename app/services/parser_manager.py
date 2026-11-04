@@ -17,8 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from app.core.config import get_logger
-from app.core.config import atomic_write_json
+from app.core.config import atomic_write_json, get_logger
 from app.core.parsers import ParserRegistry
 
 logger = get_logger("PARSER_MGR")

@@ -4,12 +4,13 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from app.core.config import logger
-
-from ._arena_snapshot import _ARENA_STORE_SNAPSHOT_JS
-from .idle_maintenance import note_network_activity
-from .session import TabSession
 from app.core.driver import driver_for_tab
 
+# 再导出：tests/test_arena_auto_battle_command.py 从本模块取用。
+# ruff 的 F401 只看单文件，识别不出跨文件再导出，故显式标注。
+from ._arena_snapshot import _ARENA_STORE_SNAPSHOT_JS  # noqa: F401
+from .idle_maintenance import note_network_activity
+from .session import TabSession
 
 ResponseListenerCallback = Callable[[TabSession, Any, Dict[str, Any], threading.Event], None]
 ResponseFilter = Union[str, Callable[[Dict[str, Any]], bool], None]
@@ -68,11 +69,11 @@ class _GlobalNetworkInterceptionManager:
     ) -> Callable[[], None]:
         """
         注册全局网络响应观察者。
-        
+
         Args:
             pattern_or_filter: 匹配规则。可为 URL 匹配子串、Callable[[event_dict], bool] 或 None（匹配全部）。
             callback: 响应处理回调，签名 (session, response, event, stop_event) -> None。
-            
+
         Returns:
             注销函数。
         """

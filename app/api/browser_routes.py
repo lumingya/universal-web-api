@@ -3,20 +3,17 @@
 from __future__ import annotations
 
 import ipaddress
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from urllib.parse import urlparse
-
-from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.core import get_browser
 from app.core.config import AppConfig, get_logger
+from app.core.driver import browser_driver, driver_for_tab
 from app.core.http_security import is_trusted_local_request
 from app.utils.browser_profile_identity import resolve_tab_browser_profile
-from app.core.driver import browser_driver, driver_for_tab
-
 
 logger = get_logger("API.BROWSER")
 router = APIRouter(prefix="/api/browser", tags=["browser"])
@@ -76,7 +73,7 @@ def verify_open_profile_url_auth(
 
     - 带了 Authorization 且控制面板认证已启用：按管理令牌校验（错误令牌 401）；
     - 否则仅接受「直接来自本机回环、没有任何反代/隧道转发头」的请求
-      （经 start.py handoff 代理时以其注入的真实客户端地址为准）——
+      （经同机反向代理或 worker 转发时以其注入的真实客户端地址为准）——
       Link Drawer 不保存面板密钥，仍可在本机使用；
     - 其余：认证已启用 → 401，未启用 → 403。
     """

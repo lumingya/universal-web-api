@@ -35,7 +35,9 @@ def current_counts() -> dict:
     ).split()
     counts = {}
     for rel in sorted(files):
-        if rel.startswith("tests/") or rel.startswith("scripts/"):
+        # 只守护生产代码。tests/ 是测试自身；scripts/ 与 tools/ 是一次性
+        # 构建/诊断工具，不进入 app/ 的运行时，也不该受生产纪律约束。
+        if rel.startswith(("tests/", "scripts/", "tools/")):
             continue
         n = _count((ROOT / rel).read_text(encoding="utf-8-sig"))
         if n:

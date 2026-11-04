@@ -15,7 +15,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
-
 ActivityProbe = Callable[[], int]
 RestartCallback = Callable[[], Awaitable[None] | None]
 

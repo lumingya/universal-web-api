@@ -121,6 +121,38 @@ class ChatEvent:
     data: Dict[str, Any] = field(default_factory=dict)
 
 
+def _events_from_choice(choice: Dict[str, Any]) -> List[ChatEvent]:
+    """把单个 choice 拆成聊天事件（reasoning / text / tool_call / media / finish）。
+
+    从 events_from_openai_chunk 的 choices 循环中原样提出，方法体与提取前
+    逐字节相同（仅缩进变化）。原来是往调用方的 events 列表里追加，这里改
+    为返回自己的列表，由调用方 extend。
+    """
+    events: List[ChatEvent] = []
+    index = int(choice.get("index") or 0)
+    delta = choice.get("delta") or choice.get("message") or {}
+    if isinstance(delta, dict):
+        reasoning = delta.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning:
+            events.append(ChatEvent("reasoning", text=reasoning, index=index))
+        content = delta.get("content")
+        if isinstance(content, str) and content:
+            events.append(ChatEvent("text", text=content, index=index))
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text" and part.get("text"):
+                    events.append(ChatEvent("text", text=str(part["text"]), index=index))
+        for tool_call in delta.get("tool_calls") or []:
+            if isinstance(tool_call, dict):
+                events.append(ChatEvent("tool_call", index=index, data=tool_call))
+        for media in delta.get("media") or []:
+            if isinstance(media, dict):
+                events.append(ChatEvent("media", index=index, data=media))
+    if choice.get("finish_reason"):
+        events.append(ChatEvent("finish", index=index, data={"finish_reason": choice["finish_reason"]}))
+    return events
+
+
 def events_from_openai_chunk(chunk: Dict[str, Any]) -> List[ChatEvent]:
     if not isinstance(chunk, dict):
         return []
@@ -132,27 +164,7 @@ def events_from_openai_chunk(chunk: Dict[str, Any]) -> List[ChatEvent]:
     for choice in chunk.get("choices") or []:
         if not isinstance(choice, dict):
             continue
-        index = int(choice.get("index") or 0)
-        delta = choice.get("delta") or choice.get("message") or {}
-        if isinstance(delta, dict):
-            reasoning = delta.get("reasoning_content")
-            if isinstance(reasoning, str) and reasoning:
-                events.append(ChatEvent("reasoning", text=reasoning, index=index))
-            content = delta.get("content")
-            if isinstance(content, str) and content:
-                events.append(ChatEvent("text", text=content, index=index))
-            elif isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text" and part.get("text"):
-                        events.append(ChatEvent("text", text=str(part["text"]), index=index))
-            for tool_call in delta.get("tool_calls") or []:
-                if isinstance(tool_call, dict):
-                    events.append(ChatEvent("tool_call", index=index, data=tool_call))
-            for media in delta.get("media") or []:
-                if isinstance(media, dict):
-                    events.append(ChatEvent("media", index=index, data=media))
-        if choice.get("finish_reason"):
-            events.append(ChatEvent("finish", index=index, data={"finish_reason": choice["finish_reason"]}))
+        events.extend(_events_from_choice(choice))
     if isinstance(chunk.get("usage"), dict):
         events.append(ChatEvent("usage", data=chunk["usage"]))
     return events

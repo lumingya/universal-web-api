@@ -16,7 +16,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import urlparse, urlsplit
 
 import requests
 
@@ -26,7 +26,6 @@ from app.utils.remote_resource import (
     normalize_remote_http_url,
     remote_url_origin,
 )
-
 
 DEFAULT_IMAGE_ACCEPT = "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
 REMOTE_IMAGE_URL_TRAILING_WRAPPERS = ")]}"
@@ -178,7 +177,7 @@ class BackgroundImageDownloader:
 
     def __init__(
         self,
-        save_dir: str | Path = "download_images",
+        save_dir: str | Path | None = None,
         *,
         max_workers: int = 4,
         min_bytes: int = 1000,
@@ -188,7 +187,8 @@ class BackgroundImageDownloader:
         max_age_seconds: float = 24 * 60 * 60,
         max_total_bytes: int = 1024 * 1024 * 1024,
     ):
-        self._save_dir = Path(save_dir)
+        # 延迟解析：未显式指定时使用 app.paths 的绝对路径，避免受启动目录影响。
+        self._save_dir = Path(save_dir) if save_dir is not None else None
         self._executor = ThreadPoolExecutor(
             max_workers=max(1, int(max_workers or 1)),
             thread_name_prefix="bg-image",
@@ -204,6 +204,25 @@ class BackgroundImageDownloader:
         self._pending_count = 0
         self._shutdown = False
         self._last_disk_cleanup_at = 0.0
+
+    # ---- 目录与缓存管理 -------------------------------------------------
+    @property
+    def save_dir(self) -> Path:
+        if self._save_dir is None:
+            from app import paths
+
+            self._save_dir = paths.download_dir()
+        return self._save_dir
+
+    def set_save_dir(self, path: str | Path) -> None:
+        """替换落盘目录（主要供测试隔离；生产环境由 app.paths 决定）。"""
+        self._save_dir = Path(path)
+
+    def clear_cache(self) -> None:
+        """清空内存中的下载结果缓存（不删除磁盘文件）。"""
+        with self._lock:
+            self._entries.clear()
+            self._pending_count = 0
 
     def start_download(
         self,
@@ -411,7 +430,7 @@ class BackgroundImageDownloader:
                     pass
 
         try:
-            self._save_dir.mkdir(parents=True, exist_ok=True)
+            self.save_dir.mkdir(parents=True, exist_ok=True)
             logger.debug(f"[IMG_DOWNLOAD] start id={download_id}")
             response = get_public_remote_resource(
                 url,
@@ -448,8 +467,8 @@ class BackgroundImageDownloader:
 
             ext = self._pick_extension(content_type, url)
             filename = f"{int(time.time())}_{uuid.uuid4().hex[:8]}{ext}"
-            temp_path = self._save_dir / f"{filename}.part"
-            final_path = self._save_dir / filename
+            temp_path = self.save_dir / f"{filename}.part"
+            final_path = self.save_dir / filename
 
             written = 0
             first_chunk_at: Optional[float] = None
@@ -482,7 +501,7 @@ class BackgroundImageDownloader:
             if not detected_ext:
                 raise ValueError("invalid_image_payload")
             if detected_ext != ext:
-                final_path = self._save_dir / f"{Path(filename).stem}{detected_ext}"
+                final_path = self.save_dir / f"{Path(filename).stem}{detected_ext}"
                 filename = final_path.name
 
             temp_path.replace(final_path)
@@ -632,7 +651,7 @@ class BackgroundImageDownloader:
 
     def _unlink_managed_file(self, local_path: str | Path) -> None:
         try:
-            root = self._save_dir.resolve()
+            root = self.save_dir.resolve()
             target = Path(local_path).resolve()
             target.relative_to(root)
             if target.is_file():
@@ -647,7 +666,7 @@ class BackgroundImageDownloader:
         self._last_disk_cleanup_at = now
         cutoff = now - self._max_age_seconds
         try:
-            for path in self._save_dir.iterdir():
+            for path in self.save_dir.iterdir():
                 if not path.is_file():
                     continue
                 try:

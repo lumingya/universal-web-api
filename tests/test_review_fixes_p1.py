@@ -11,7 +11,6 @@ import pytest
 
 from app.core import http_security as hs
 
-
 SYNTH_TOKEN = "synthetic-token-DO-NOT-USE-123"
 
 
@@ -45,6 +44,7 @@ def test_redact_env_for_backup_strips_secrets_and_credential_urls():
 
 def _backup_app():
     from fastapi import FastAPI
+
     from app.api import system
 
     app = FastAPI()
@@ -111,9 +111,9 @@ def test_backup_with_dashboard_auth_requires_token(synthetic_env_dir, monkeypatc
 
 
 def test_backup_import_ignores_redaction_placeholders(synthetic_env_dir, monkeypatch):
-    from app.api import system
+    from app.api.system import settings as system_settings
 
-    monkeypatch.setattr(system, "_schedule_service_restart", lambda *_a, **_k: None)
+    monkeypatch.setattr(system_settings, "_schedule_service_restart", lambda *_a, **_k: None)
     resp = _request(_backup_app(), "POST", "/api/settings/backup",
                     json_body={"files": {"env": {"AUTH_TOKEN": "***", "HELPER_MODEL": "y"}}})
     assert resp.status_code == 200, resp.text
@@ -171,8 +171,9 @@ def test_cors_origins_default_is_empty(monkeypatch):
 
 
 def test_main_app_rejects_cross_origin_management_requests(monkeypatch):
-    import main
     from httpx import ASGITransport, AsyncClient
+
+    import main
 
     monkeypatch.setattr(main, "_cors_origins", [])
 
@@ -252,7 +253,7 @@ def test_main_lifespan_warns_public_bind_without_auth(monkeypatch):
     for name in ("AUTH_ENABLED", "AUTH_TOKEN", "DASHBOARD_AUTH_ENABLED", "DASHBOARD_AUTH_TOKEN",
                  hs.INSECURE_OVERRIDE_ENV):
         monkeypatch.delenv(name, raising=False)
-    
+
     # 改为只告警，不抛出 InsecureStartupConfigError 阻断启动
     main._enforce_secure_startup_config()
 
@@ -262,21 +263,9 @@ def test_main_lifespan_warns_public_bind_without_auth(monkeypatch):
     main._enforce_secure_startup_config()
 
 
-def test_start_launcher_loads_security_module_without_app_package():
-    import importlib.util
-    root = Path(__file__).resolve().parents[1]
-    spec = importlib.util.spec_from_file_location("_start_under_test", root / "start.py")
-    start = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(start)
-    module = start._load_http_security_module()
-    assert module.startup_security_errors(host="0.0.0.0", env={})
-    # 即使存在配置错误，启动器检查也只输出告警并返回 True
-    assert start._check_startup_security() is True
-
-
 def test_v300_env_example_compat_allows_startup_with_warnings(monkeypatch):
     """3.0.0 模板兼容：AUTH_ENABLED/DASHBOARD_AUTH_ENABLED 为 your-secret-here 且 APP_HOST=0.0.0.0 时只告警不拒绝启动。"""
-    import importlib.util
+
     import main
     from app.core.config import AppConfig
 
@@ -291,13 +280,6 @@ def test_v300_env_example_compat_allows_startup_with_warnings(monkeypatch):
 
     # main 启动检查不抛异常
     main._enforce_secure_startup_config()
-
-    # start.py 启动检查返回 True
-    root = Path(__file__).resolve().parents[1]
-    spec = importlib.util.spec_from_file_location("_start_compat_test", root / "start.py")
-    start = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(start)
-    assert start._check_startup_security() is True
 
 
 def test_env_example_is_safe_to_copy():
@@ -323,7 +305,7 @@ def test_env_example_is_safe_to_copy():
 # S8 / S9 · 活动内容落盘与同源提供
 # ---------------------------------------------------------------------------
 
-from app.utils import media_safety as ms  # noqa: E402
+from app.utils import media_safety as ms
 
 SVG_PAYLOAD = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>' + b" " * 1200
 HTML_PAYLOAD = b"<!doctype html><html><script>alert(document.domain)</script></html>" + b" " * 1200
@@ -424,11 +406,13 @@ def test_media_delivery_policy(name, expected_type, expected_disp):
 
 
 def test_served_media_is_hardened_for_legacy_active_files():
-    import main
     from httpx import ASGITransport, AsyncClient
 
-    base = Path("download_images")
-    base.mkdir(exist_ok=True)
+    import main
+    from app import paths
+
+    # 媒体目录由 _isolate_download_dir 指向 tmp_path，生产代码按请求解析该目录。
+    base = paths.download_dir()
     names = {"_review_s8_legacy.svg": SVG_PAYLOAD, "_review_s9_legacy.html": HTML_PAYLOAD,
              "_review_ok.png": b"\x89PNG\r\n\x1a\n" + b"\x00" * 32}
     for name, data in names.items():
@@ -486,6 +470,7 @@ def test_network_debug_capture_strict_bool(monkeypatch, value, expected):
 def test_network_debug_dir_retention_deletes_expired_snapshots(tmp_path):
     import os
     import time as _time
+
     from app.core.network_monitor import trim_network_parser_debug_dir
 
     old = tmp_path / "old.json"

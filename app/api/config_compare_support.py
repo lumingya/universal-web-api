@@ -10,20 +10,18 @@ import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 from urllib.parse import quote
 
 import requests
-
 from fastapi import HTTPException
 
 from app.api.config_route_models import _normalize_preset_config_payload
-from app.services.config_engine import config_engine, ConfigConstants
+from app.services.config_engine import ConfigConstants, config_engine
 from app.utils.remote_resource import (
     UnsafeRemoteResourceError,
     get_public_remote_resource,
 )
-
 
 DEFAULT_OFFICIAL_REPO = "lumingya/universal-web-api"
 OFFICIAL_CONFIG_CACHE_DIR = (

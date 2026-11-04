@@ -18,7 +18,6 @@ import pytest
 from app.core import cdp_hygiene
 from tests._real_browser import launch_page
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
@@ -270,8 +269,9 @@ def test_hot_polling_scripts_return_json_strings():
 
 
 def test_hygiene_installed_on_browser_connection_import():
-    import app.core.browser.connection  # noqa: F401
     from DrissionPage._elements import chromium_element as ce
+
+    import app.core.browser.connection  # noqa: F401
 
     assert getattr(ce.parse_js_result, "_uwapi_release_wrapper", False)
 

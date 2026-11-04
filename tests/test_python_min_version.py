@@ -1,7 +1,7 @@
 """R0-2：保证仓库里的 Python 代码能在最低支持版本（3.10）上被解析。
 
-背景（路线图 N1）：start.py 曾在 f-string 里嵌套同种引号（PEP 701 写法，只有 3.12+ 能解析），
-README 承诺的 3.10/3.11 用户一启动就 SyntaxError，而 start.bat 快速路径又不检查版本。
+背景（路线图 N1）：代码里曾出现只有 3.12+ 才能解析的写法，而 README 承诺支持 3.10/3.11。
+现在最低版本由 pyproject.toml 的 requires-python 统一声明，uv 按 .python-version 选择解释器。
 
 检查方式：
 - 在 3.10/3.11 上直接 compile() 每个文件，原生语法检查即可发现问题；
@@ -117,7 +117,7 @@ def test_all_tracked_python_files_parse_on_min_python():
 @pytest.mark.parametrize(
     ("snippet", "expected"),
     [
-        ("p = {}\nx = f\"{', '.join(f'{p['a']}' for _ in [1])}\"\n", True),   # 旧 start.py 的写法
+        ("p = {}\nx = f\"{', '.join(f'{p['a']}' for _ in [1])}\"\n", True),   # 旧启动脚本的写法
         ("x = f\"{d[\"k\"]}\"\n", True),
         ("x = f\"{'\\n'.join(a)}\"\n", True),
         ("x = f\"{a # c\n}\"\n", True),
@@ -132,18 +132,14 @@ def test_pep701_detector(snippet, expected):
     assert bool(pep701_only_constructs(snippet)) is expected
 
 
-def test_launchers_share_min_python():
-    """start.py 的 MIN_PYTHON 与 start.bat 的两处版本检查必须一致，改版本时一起改。"""
-    tree = ast.parse((ROOT / "start.py").read_text(encoding="utf-8"))
-    values = [
-        ast.literal_eval(node.value)
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Name) and t.id == "MIN_PYTHON" for t in node.targets)
-    ]
-    assert values == [MIN_PYTHON]
-    bat = (ROOT / "start.bat").read_text(encoding="utf-8")
+def test_pyproject_declares_same_min_python():
+    """pyproject.toml 的 requires-python 必须与测试里的最低版本一致。"""
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover - Python 3.10
+        import tomli as tomllib
+
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        requires = tomllib.load(handle)["project"]["requires-python"]
     major, minor = MIN_PYTHON
-    assert f"sys.version_info < ({major}, {minor})" in bat, "start.bat 快速路径缺少版本检查"
-    assert f"!PY_MINOR! geq {minor}" in bat, "start.bat 回退路径的最低版本与 start.py 不一致"
-    assert f"最低要求: Python {major}.{minor}+" in bat
+    assert requires == f">={major}.{minor}", requires

@@ -13,12 +13,12 @@ Phase A 实现：
 """
 
 import hashlib
-from typing import List, Optional, Any, Dict
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from app.core.config import get_logger
-from app.models.schemas import normalize_modalities_config
 from app.core.driver import as_element
+from app.models.schemas import normalize_modalities_config
 
 logger = get_logger("IMG_EXT")
 
@@ -83,23 +83,23 @@ KNOWN_1X1_PLACEHOLDER_DATA_URIS = {
 class ImageExtractor:
     """
     图片提取器
-    
+
     从页面元素中提取图片信息，支持四种来源：
     1. http(s) URL：直接返回 kind="url"
-    2. data: URI：直接返回 kind="data_uri"  
+    2. data: URI：直接返回 kind="data_uri"
     3. blob: URL：转换为 data_uri 后返回
     4. 相对路径：补全为绝对 URL 后返回
-    
+
     使用方式：
         extractor = ImageExtractor()
         images = extractor.extract(element, config)
     """
-    
+
     # ============ 核心 JS 代码 ============
     # 功能：收集图片 + 可选等待加载 + blob 转 data_uri
     # 执行方式：async IIFE，使用 .call(this, opts)
     # 返回格式：{ images: [...], warnings: [...] }
-    
+
     EXTRACT_IMAGES_JS = r"""
     return (async function(opts) {
         const {
@@ -218,7 +218,7 @@ class ImageExtractor:
         }
 
         // ===== 辅助函数 =====
-        
+
         // 获取图片源（优先 currentSrc）
         function pickSrc(img) {
             if (!img) return "";
@@ -569,7 +569,7 @@ class ImageExtractor:
 
     def __init__(self):
         self._log_prefix = "[ImageExtractor]"
-    
+
     def extract(
         self,
         element: Any,
@@ -578,16 +578,16 @@ class ImageExtractor:
     ) -> List[Dict]:
         """
         从页面元素提取图片
-        
+
         Args:
             element: 页面元素对象（需支持 run_js 方法）
             config: 图片提取配置（ImageExtractionConfig 格式）
             container_selector_fallback: 容器选择器回退值（当 config 中未指定时使用）
-        
+
         Returns:
             图片数据列表，每项符合 ImageData 格式
             任何异常都返回空列表，不抛出异常
-        
+
         Example:
             >>> extractor = ImageExtractor()
             >>> images = extractor.extract(element, {"enabled": True})
@@ -602,11 +602,11 @@ class ImageExtractor:
         if not final_config.get("enabled", False):
             logger.debug(f" 图片提取未启用，跳过")
             return []
-        
+
         if not element:
             logger.debug(f" 元素为空，跳过")
             return []
-        
+
         # 构建 JS 参数
         container_selector = final_config.get("container_selector") or container_selector_fallback
         js_opts = {
@@ -627,27 +627,27 @@ class ImageExtractor:
                 final_config.get("request_baseline_exclude_existing_nodes")
             ),
         }
-        
+
         try:
             # 执行 JS
             result = as_element(element).run_js(self.EXTRACT_IMAGES_JS, js_opts)
-            
+
             if not result:
                 logger.debug(f" JS 返回空结果")
                 return []
-            
+
             raw_images = result.get("images", [])
             warnings = result.get("warnings", [])
             scope = result.get("scope", "-")
             node_count = result.get("nodeCount", "-")
-            
+
             # 记录警告（不中断流程）
             for w in warnings:
                 logger.warning(f" {w}")
-            
+
             # 规范化 + 去重
             images = self._normalize_and_dedupe(raw_images)
-            
+
             # 日志摘要
             is_quiet = bool(final_config.get("quiet", False))
             if not is_quiet or len(images) > 0:
@@ -659,18 +659,18 @@ class ImageExtractor:
                     self._log_image_summary(img)
                 if len(images) > 5:
                     logger.debug(f" ... 还有 {len(images) - 5} 张")
-            
+
             return images
-            
+
         except Exception as e:
             # 🔴 关键：图片提取失败不能影响主流程
             logger.error(f" 提取失败（已降级为空列表）: {e}")
             return []
-    
+
     def _normalize_and_dedupe(self, raw_images: List[Dict]) -> List[Dict]:
         """
         规范化并去重
-        
+
         处理逻辑：
         1. 过滤窗口占位图与已知 1x1 空白占位图
         2. 确定 kind (url/data_uri)
@@ -680,21 +680,21 @@ class ImageExtractor:
         seen_keys = set()
         result = []
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        
+
         for i, img in enumerate(raw_images):
             if img.get("_windowed_placeholder") is True:
                 logger.debug(" 跳过图片窗口脚本替换的占位图")
                 continue
             src = img.get("src", "")
             data_uri = img.get("data_uri")
-            
+
             # 过滤已知的 1x1 占位图
             if (src and src.strip() in KNOWN_1X1_PLACEHOLDER_DATA_URIS) or (
                 data_uri and data_uri.strip() in KNOWN_1X1_PLACEHOLDER_DATA_URIS
             ):
                 logger.debug(" 跳过已知的 1x1 空白占位图片")
                 continue
-            
+
             # 确定 kind 和去重键
             if data_uri:
                 kind = "data_uri"
@@ -706,18 +706,18 @@ class ImageExtractor:
             else:
                 kind = "url"
                 key = f"url:{src}"
-            
+
             # 去重检查
             if key in seen_keys:
                 logger.debug(f" 跳过重复: {key[:50]}...")
                 continue
             seen_keys.add(key)
-            
+
             # 检测来源类型
             source = img.get("_source")
             if not source:
                 source = self._detect_source(src)
-            
+
             # 构建标准化结构（符合 ImageData schema）
             image_data = {
                 "kind": kind,
@@ -732,11 +732,11 @@ class ImageExtractor:
                 "detected_at": now,
                 "source": source
             }
-            
+
             result.append(image_data)
-        
+
         return result
-    
+
     def _detect_source(self, src: str) -> str:
         """检测图片来源类型"""
         if not src:
@@ -748,17 +748,17 @@ class ImageExtractor:
         if src.startswith("http://") or src.startswith("https://"):
             return "currentSrc"
         return "relative"
-    
+
     def _log_image_summary(self, img: Dict):
         """
         记录图片摘要信息（安全日志）
-        
+
         ⚠️ 绝不记录 data_uri 完整内容
         """
         kind = img.get("kind")
         source = img.get("source", "unknown")
         index = img.get("index", 0)
-        
+
         if kind == "url":
             url = img.get("url", "")
             # 截断长 URL

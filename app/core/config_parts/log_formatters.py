@@ -4,17 +4,17 @@ app/core/config_parts/log_formatters.py - 日志格式化器与 Handler 管理�
 import ctypes
 import datetime
 import logging
-from logging.handlers import RotatingFileHandler
 import os
-from pathlib import Path
 import re
 import sys
 import threading
 import time
-from typing import Any, List, Optional, Tuple
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from typing import Any, Optional
 
-from .env_config import PROJECT_ROOT, DEFAULT_LOG_DIR
 from .browser_constants import _BrowserConstantEnabledFilter
+from .env_config import DEFAULT_LOG_DIR, PROJECT_ROOT
 from .log_collector import log_collector
 from .log_redaction import _sanitize_sensitive_text
 

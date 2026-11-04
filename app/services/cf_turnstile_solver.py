@@ -10,15 +10,15 @@ app/services/cf_turnstile_solver.py - Cloudflare Turnstile / 5s 盾通用自动�
 
 from __future__ import annotations
 
-import math
 import random
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import urlsplit
 
 from app.core.config import logger as default_logger
-from app.utils.human_mouse import cdp_precise_click as default_cdp_precise_click, smooth_move_mouse as default_smooth_move_mouse
 from app.core.driver import driver_for_tab
+from app.utils.human_mouse import cdp_precise_click as default_cdp_precise_click
+from app.utils.human_mouse import smooth_move_mouse as default_smooth_move_mouse
 
 _DEFAULT_MAX_ATTEMPTS = 3
 

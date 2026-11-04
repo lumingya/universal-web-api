@@ -7,13 +7,12 @@ import json
 import os
 import re
 import threading
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.core.config import logger
-from app.utils.site_url import extract_remote_site_domain, route_domain_matches
-
+from app.utils.site_url import route_domain_matches
 
 ARENA_MODEL_CATALOG_CONFIG_PATH = Path(
     os.getenv(
@@ -526,7 +525,7 @@ def load_arena_offline_cache_models() -> List[Dict[str, Any]]:
             return []
 
         try:
-            with open(ARENA_MODELS_CACHE_PATH, "r", encoding="utf-8") as f:
+            with open(ARENA_MODELS_CACHE_PATH, encoding="utf-8") as f:
                 raw_list = json.load(f)
             if not isinstance(raw_list, list):
                 _offline_cached_models = []
@@ -606,6 +605,86 @@ def load_arena_offline_cache_models() -> List[Dict[str, Any]]:
 # 模型过滤引擎（明池 + 暗池）
 # ==============================================================================
 
+def _has_video_keyword(search_str: str, video_keywords: Tuple[str, ...]) -> bool:
+    """名称里是否命中视频关键词。
+
+    保留 kling / inkling 特例：'inkling' 含 'kling' 子串但不是视频模型。
+    """
+    return any((k in search_str and (k != "kling" or "inkling" not in search_str)) for k in video_keywords)
+
+
+def _matches_target_modality(
+    model: Dict[str, Any],
+    search_str: str,
+    target_modality: str,
+    image_keywords: Tuple[str, ...],
+) -> bool:
+    """模型是否匹配目标模态。
+
+    code / search / video 要求精确相等；image 与 text 在 modality 为空时
+    回退到名称关键词判定。
+    """
+    model_modality = _canonical_modality(model.get("modality"))
+    if target_modality:
+        if target_modality in {"code", "search", "video"}:
+            if model_modality != target_modality:
+                return False
+        elif target_modality == "image":
+            model_is_image = (model_modality == "image") or (
+                not model_modality and any(k in search_str for k in image_keywords)
+            )
+            if not model_is_image:
+                return False
+        elif target_modality == "text":
+            if model_modality and model_modality != "text":
+                return False
+            if not model_modality and any(k in search_str for k in image_keywords):
+                return False
+        else:
+            if model_modality and model_modality != target_modality:
+                return False
+    return True
+
+
+def _passes_dark_pool_rules(
+    model: Dict[str, Any],
+    searchable: str,
+    dark_whitelist: List[str],
+    dark_blacklist: List[str],
+    dark_since_ts: Optional[float],
+) -> bool:
+    """暗池模型是否放行：黑名单最终否决，其次白名单与日期条件。"""
+    if dark_blacklist and any(kw in searchable for kw in dark_blacklist):
+        return False
+
+    # 2. 白名单与日期条件检查（若设置了白名单或日期，必须满足其中之一）
+    if dark_whitelist or dark_since_ts is not None:
+        whitelisted = bool(dark_whitelist and any(kw in searchable for kw in dark_whitelist))
+        if not whitelisted:
+            if dark_since_ts is None:
+                return False
+            model_ts = get_model_timestamp(model)
+            if model_ts is None or model_ts < dark_since_ts:
+                return False
+    return True
+
+
+def _passes_public_pool_rules(
+    searchable: str,
+    pub_includes: List[str],
+    pub_excludes: List[str],
+) -> bool:
+    """明池模型是否放行：include 需命中其一，exclude 命中即排除。
+
+    明池规则与暗池规则互不越界——这也是既有行為，不要顺手"统一"。
+    """
+    if pub_includes and not any(keyword in searchable for keyword in pub_includes):
+        return False
+    if pub_excludes and any(keyword in searchable for keyword in pub_excludes):
+        return False
+    return True
+
+
 def filter_arena_catalog_models(
     models: List[Dict[str, Any]],
     catalog_config: Any,
@@ -659,29 +738,13 @@ def filter_arena_catalog_models(
         search_str = " ".join(
             str(model.get(k) or "") for k in ("name", "public_name", "display_name", "search_name")
         ).lower()
-        if target_modality != "video":
-            if any((k in search_str and (k != "kling" or "inkling" not in search_str)) for k in video_keywords):
-                continue
+        if target_modality != "video" and _has_video_keyword(search_str, video_keywords):
+            continue
 
-        model_modality = _canonical_modality(model.get("modality"))
-        if target_modality:
-            if target_modality in {"code", "search", "video"}:
-                if model_modality != target_modality:
-                    continue
-            elif target_modality == "image":
-                model_is_image = (model_modality == "image") or (
-                    not model_modality and any(k in search_str for k in image_keywords)
-                )
-                if not model_is_image:
-                    continue
-            elif target_modality == "text":
-                if model_modality and model_modality != "text":
-                    continue
-                if not model_modality and any(k in search_str for k in image_keywords):
-                    continue
-            else:
-                if model_modality and model_modality != target_modality:
-                    continue
+        if not _matches_target_modality(
+            model, search_str, target_modality, image_keywords
+        ):
+            continue
 
         searchable = " ".join(
             str(model.get(key) or "")
@@ -701,24 +764,12 @@ def filter_arena_catalog_models(
                 continue
 
             # 1. 黑名单最终否决
-            if dark_blacklist and any(kw in searchable for kw in dark_blacklist):
+            if not _passes_dark_pool_rules(
+                model, searchable, dark_whitelist, dark_blacklist, dark_since_ts
+            ):
                 continue
-
-            # 2. 白名单与日期条件检查（若设置了白名单或日期，必须满足其中之一）
-            if dark_whitelist or dark_since_ts is not None:
-                whitelisted = bool(dark_whitelist and any(kw in searchable for kw in dark_whitelist))
-                if not whitelisted:
-                    if dark_since_ts is None:
-                        continue
-                    model_ts = get_model_timestamp(model)
-                    if model_ts is None or model_ts < dark_since_ts:
-                        continue
-        else:
-            # 明池处理规则（不受暗池规则影响）
-            if pub_includes and not any(keyword in searchable for keyword in pub_includes):
-                continue
-            if pub_excludes and any(keyword in searchable for keyword in pub_excludes):
-                continue
+        elif not _passes_public_pool_rules(searchable, pub_includes, pub_excludes):
+            continue
 
         mid_lower = str(model.get("arena_model_id") or "").lower()
         if mid_lower in result_seen_ids:

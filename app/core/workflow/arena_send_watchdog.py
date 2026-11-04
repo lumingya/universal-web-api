@@ -9,8 +9,8 @@ was accepted.
 from __future__ import annotations
 
 import json
-from collections import Counter
 import time
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Mapping, Optional
 from urllib.parse import urlparse
@@ -18,9 +18,13 @@ from urllib.parse import urlparse
 from app.core.config import logger
 from app.core.driver import driver_for_tab
 
+# 常量已下沉到 app.core.error_codes（叶子模块，用于断开 core<->services 导入环）；
+# 此处再导出以保证既有 `from ...arena_send_watchdog import ARENA_PAGE_ERROR` 仍可用。
+from app.core.error_codes import (
+    ARENA_PAGE_ERROR,
+    ARENA_SEND_NO_TARGET_AFTER_RETRY,
+)
 
-ARENA_SEND_NO_TARGET_AFTER_RETRY = "arena_send_no_target_after_retry"
-ARENA_PAGE_ERROR = "arena_page_error"
 ARENA_NATIVE_STOP_SELECTOR = 'button[aria-label="Stop generation"]'
 ARENA_UPLOAD_CARD_SELECTOR = (
     'div.group.relative.overflow-hidden:has(img[src^="blob:"])'

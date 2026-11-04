@@ -1,7 +1,6 @@
 import subprocess
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 METHODS_FILE = ROOT / "static/js/components/commands/CommandsTabMethods.js"
 

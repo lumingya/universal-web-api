@@ -11,7 +11,6 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import requests
 
-
 ALLOWED_REMOTE_SCHEMES = frozenset({"http", "https"})
 MAX_REMOTE_REDIRECTS = 4
 _PROXY_FAKE_IP_NETWORKS = (

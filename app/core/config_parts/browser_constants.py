@@ -3,19 +3,19 @@ app/core/config_parts/browser_constants.py - 浏览器常量配置与过滤器�
 """
 import json
 import logging
-import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from .env_config import AppConfig, PROJECT_ROOT
+from typing import Dict, Optional
+
+from .env_config import AppConfig
 
 
 class BrowserConstants:
     """浏览器相关常量（从 JSON 文件加载，支持热重载）"""
-    
+
     # ===== 配置缓存 =====
     _config: Optional[Dict] = None
     _config_file = Path("config/browser_config.json")
-    
+
     # ===== 默认值字典 =====
     _DEFAULTS = {
         'DEFAULT_PORT': 9222,
@@ -104,14 +104,14 @@ class BrowserConstants:
         'ATTACHMENT_READY_IDLE_TIMEOUT': 8.0,
         'ATTACHMENT_READY_HARD_MAX_WAIT': 90.0,
     }
-    
+
     # ===== 类属性（会被配置文件覆盖）=====
-    
+
     # 连接配置
     DEFAULT_PORT = 9222
     CONNECTION_TIMEOUT = 10
     MAX_REQUEST_EXECUTE_TIME_SEC = 300.0
-    
+
     # 延迟配置
     STEALTH_DELAY_MIN = 0.03
     STEALTH_DELAY_MAX = 0.1
@@ -141,7 +141,7 @@ class BrowserConstants:
     PAGE_INTERACTION_RECT_TOLERANCE = 3
     WORKFLOW_WAKE_TAB_BEFORE_INTERACTION = True
     WORKFLOW_FOCUS_EMULATION_ON_INTERACTION = True
-    
+
     # 元素查找
     DEFAULT_ELEMENT_TIMEOUT = 3
     FALLBACK_ELEMENT_TIMEOUT = 1
@@ -154,22 +154,22 @@ class BrowserConstants:
     LOG_FILE_ENABLED = True
     LOG_WEB_COLLECTOR_ENABLED = True
     LOG_WEB_MAX_RECORDS = 5000
-    
+
     # 流式监控
     STREAM_CHECK_INTERVAL_MIN = 0.1
     STREAM_CHECK_INTERVAL_MAX = 1.0
     STREAM_CHECK_INTERVAL_DEFAULT = 0.3
-    
+
     STREAM_SILENCE_THRESHOLD = 6.0
     STREAM_MAX_TIMEOUT = 600
     STREAM_INITIAL_WAIT = 180
-    
+
     # 流式监控增强配置
     STREAM_CONTENT_SHRINK_TOLERANCE = 3
-    
+
     STREAM_STABLE_COUNT_THRESHOLD = 5
     STREAM_SILENCE_THRESHOLD_FALLBACK = 10.0
-    
+
     # 输入验证
     MAX_MESSAGE_LENGTH = 100000
     MAX_MESSAGES_COUNT = 100
@@ -180,7 +180,7 @@ class BrowserConstants:
 
     # 文本输入
     TEXT_INPUT_CHUNK_SIZE = 30000
-    
+
     # 两阶段 baseline 配置
     STREAM_USER_MSG_WAIT = 1.5
     STREAM_PRE_BASELINE_DELAY = 0.3
@@ -222,43 +222,43 @@ class BrowserConstants:
         """从文件加载配置"""
         if cls._config_file.exists():
             try:
-                with open(cls._config_file, 'r', encoding='utf-8') as f:
+                with open(cls._config_file, encoding='utf-8') as f:
                     cls._config = json.load(f)
                 return
             except Exception as e:
                 print(f"[BrowserConstants] 加载配置失败: {e}")
-        
+
         # 加载失败或文件不存在，使用默认值
         cls._config = cls._DEFAULTS.copy()
-    
+
     @classmethod
     def _apply_to_class_attrs(cls):
         """将配置值应用到类属性（兼容旧代码直接访问类属性的方式）"""
         if cls._config is None:
             cls._load_config()
-        
+
         for key, value in cls._config.items():
             if hasattr(cls, key):
                 setattr(cls, key, value)
-        
+
         # 同步环境变量中的浏览器端口
         env_port = AppConfig.get_browser_port()
         if env_port:
             cls.DEFAULT_PORT = env_port
-    
+
     @classmethod
     def get(cls, key: str):
         """获取配置值（支持动态加载）"""
         if cls._config is None:
             cls._load_config()
-        
+
         return cls._config.get(key, cls._DEFAULTS.get(key))
-    
+
     @classmethod
     def get_defaults(cls) -> Dict:
         """获取所有默认值"""
         return cls._DEFAULTS.copy()
-    
+
     @classmethod
     def reload(cls):
         """重新加载配置（热重载）"""

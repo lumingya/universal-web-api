@@ -9,7 +9,6 @@ from typing import Any, Callable, ContextManager, Dict, Generator, Optional
 
 from app.core.config import SSEFormatter
 
-
 InteractionSlot = Callable[[str, str], ContextManager[bool]]
 
 

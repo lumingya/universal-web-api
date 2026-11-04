@@ -3,10 +3,10 @@ from contextlib import contextmanager
 import pytest
 
 from app.core.config import WorkflowError
+from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
 from app.core.workflow.executor import WorkflowExecutor
 from app.core.workflow.executor_actions import WorkflowExecutorActionMixin
 from app.core.workflow.executor_send import WorkflowExecutorSendMixin
-from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
 
 
 class _StrictRunJsTab:

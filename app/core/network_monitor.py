@@ -8,29 +8,29 @@ app/core/network_monitor.py - 网络响应拦截监听器
 - 失败时触发回退到 DOM 模式
 """
 
-import time
-import logging
 import json
+import logging
 import re
+import time
 from collections import deque
-from typing import Generator, Optional, Dict, Callable, Any
 from pathlib import Path
+from typing import Any, Callable, Dict, Generator, Optional
 
-from app.core.config import (
-    logger,
-    SSEFormatter,
-    BrowserConstants,
-    sanitize_sensitive_data,
-    DEFAULT_LOG_DIR,
-)
 from app.core.background_image_downloader import (
     background_image_downloader,
     build_image_download_request_context,
     get_image_download_partition,
     normalize_remote_image_url,
 )
-from app.core.parsers import ParserRegistry, ResponseParser
+from app.core.config import (
+    DEFAULT_LOG_DIR,
+    BrowserConstants,
+    SSEFormatter,
+    logger,
+    sanitize_sensitive_data,
+)
 from app.core.driver import driver_for_tab
+from app.core.parsers import ParserRegistry, ResponseParser
 
 
 def _network_debug_capture_retention_seconds() -> float:
@@ -237,19 +237,19 @@ class _EventOnlyParser(ResponseParser):
 class NetworkMonitor:
     """
     网络响应拦截监听器
-    
+
     核心流程：
     1. 启动网络监听（page.listen.start）
     2. 循环等待响应（page.listen.wait）
     3. 解析响应增量（parser.parse_chunk）
     4. 流式输出（yield SSE chunk）
     5. 检测结束条件（超时/done/取消）
-    
+
     回退机制：
     - 首次响应超时（5s）→ 抛出 NetworkMonitorTimeout
     - executor 捕获后切换到 StreamMonitor
     """
-    
+
     # 默认超时配置
     DEFAULT_FIRST_RESPONSE_TIMEOUT = 300.0   # 首次响应超时（触发回退）
     DEFAULT_HARD_TIMEOUT = 300             # 全局硬超时
@@ -270,7 +270,7 @@ class NetworkMonitor:
     ACTIVE_STREAM_RESPONSE_POLL_TIMEOUT = 0.01  # 锁定 SSE 后仅快速扫队列，不阻塞吐出
     LISTEN_RESTART_BACKOFF = 0.1          # 异常重建后的最小退避，避免忙循环
     PRESERVED_LISTENER_TTL = 120.0        # 修复#3b：可恢复错误后保留监听的最长存活时间（秒）
-    
+
     def __init__(self, tab, formatter: SSEFormatter,
                  parser: ResponseParser,
                  stop_checker: Optional[Callable[[], bool]] = None,
@@ -280,7 +280,7 @@ class NetworkMonitor:
                  image_config: Optional[Dict] = None):
         """
         初始化网络监听器
-        
+
         Args:
             tab: DrissionPage 标签页对象
             formatter: SSE 格式化器
@@ -294,7 +294,7 @@ class NetworkMonitor:
         self._should_stop = stop_checker or (lambda: False)
         self._event_handler = event_handler
         self._result_handler = result_handler
-        
+
         # 从配置中加载参数
         self._stream_config = stream_config or {}
         self._image_config = image_config or {}
@@ -419,7 +419,7 @@ class NetworkMonitor:
             max(initial_target_body_wait, max(float(self._response_interval or 0.5), 0.2)),
             max(float(self._hard_timeout or self.DEFAULT_HARD_TIMEOUT), 1.0),
         )
-                
+
         # 监听预启动标记（用于提前启动监听）
         self._pre_started = False
         # 状态追踪
@@ -2015,7 +2015,7 @@ class NetworkMonitor:
             return max(1, mb) * 1024 * 1024
         except Exception:
             return 50 * 1024 * 1024
-        
+
     def _expire_stale_preserved_listener(self) -> None:
         """修复#3b：处理上一轮因可恢复错误（429/403/503）保留下来的监听。
 
@@ -2047,36 +2047,36 @@ class NetworkMonitor:
         self._expire_stale_preserved_listener()
         if self._pre_started and self._listen_is_active():
             return
-        
+
         if not self._listen_pattern:
             logger.warning("[NetworkMonitor] listen_pattern 未配置")
             return
-        
+
         try:
             # 启用复用模式：使用 tab 主连接，不创建额外 CDP session
             self._ensure_listening("pre_start")
             logger.debug(f"[NetworkMonitor] 发送前启动监听 - 复用模式 (pattern={self._listen_pattern!r})")
         except Exception as e:
             logger.error(f"[NetworkMonitor] 预启动失败: {e}")
-    
+
     def monitor(self, selector: str = None, user_input: str = "",
                 completion_id: Optional[str] = None) -> Generator[str, None, None]:
         """
         监听网络响应并流式输出
-        
+
         v5.11：
         - pre_start 已在发送前启动监听
         - 此处仅做兜底检查（正常不应走到未启动的情况）
         - 响应结束后立即 stop()，最小化暴露窗口
-        
+
         Args:
             selector: 选择器（兼容参数，实际不使用）
             user_input: 用户输入（用于日志）
             completion_id: 完成 ID
-        
+
         Yields:
             SSE 格式的数据块
-        
+
         Raises:
             NetworkMonitorTimeout: 首次响应超时（触发回退）
             NetworkMonitorError: 其他网络监听错误
@@ -2089,7 +2089,7 @@ class NetworkMonitor:
 
         if completion_id is None:
             completion_id = SSEFormatter._generate_id()
-        
+
         # 重置解析器状态
         self._reset_parser_state()
         self._total_chunks = 0
@@ -2102,7 +2102,7 @@ class NetworkMonitor:
         self._reset_media_generation_state_cache()
         self._last_stream_media_items = []
         self._prefetched_image_urls = set()
-        
+
         # 兜底：如果 pre_start 未被调用，在此启动（可能错过首包）
         if not self._is_listening or not self._listen_is_active():
             logger.warning(
@@ -2110,7 +2110,7 @@ class NetworkMonitor:
                 "（可能错过 requestWillBeSent）"
             )
             self._ensure_listening("monitor_start")
-        
+
         try:
             yield from self._stream_output_phase(completion_id)
         finally:
@@ -2118,7 +2118,7 @@ class NetworkMonitor:
             self._cleanup()
             self._pre_started = False
             self._preserve_deadline = 0.0
-    
+
     def _stream_output_phase(self, completion_id: str) -> Generator[str, None, None]:
         """
         流式输出阶段
@@ -2338,7 +2338,7 @@ class NetworkMonitor:
                         except Exception as media_exc:
                             logger.debug(f"[NetworkMonitor] 媒体结果记录失败（忽略）: {media_exc}")
                         try:
-                            media_state = self._get_media_generation_state_cached(
+                            self._get_media_generation_state_cached(
                                 active_stream_body,
                                 parse_result,
                             )
@@ -2917,7 +2917,7 @@ class NetworkMonitor:
             except Exception as media_exc:
                 logger.debug(f"[NetworkMonitor] 媒体结果记录失败（忽略）: {media_exc}")
             try:
-                media_state = self._get_media_generation_state_cached(
+                self._get_media_generation_state_cached(
                     raw_body,
                     parse_result,
                 )
@@ -3155,21 +3155,21 @@ def create_network_monitor(tab, formatter: SSEFormatter,
                            image_config: Optional[Dict] = None) -> NetworkMonitor:
     """
     创建网络监听器（工厂函数）
-    
+
     Args:
         tab: DrissionPage 标签页
         formatter: SSE 格式化器
         stream_config: 流式配置（必须包含 network.parser）
         stop_checker: 取消检查函数
-    
+
     Returns:
         NetworkMonitor 实例
-    
+
     Raises:
         ValueError: 配置缺失或解析器不存在
     """
     network_config = stream_config.get("network", {})
-    
+
     # 获取解析器 ID
     parser_id = network_config.get("parser")
     event_only = bool(network_config.get("event_only", False))
@@ -3184,7 +3184,7 @@ def create_network_monitor(tab, formatter: SSEFormatter,
             parser = ParserRegistry.get(parser_id)
         except ValueError as e:
             raise ValueError(f"解析器不存在: {e}")
-    
+
     return NetworkMonitor(
         tab=tab,
         formatter=formatter,

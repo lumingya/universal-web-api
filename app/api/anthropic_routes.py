@@ -8,29 +8,27 @@ app/api/anthropic_routes.py - Anthropic Messages API compatibility layer
 
 from __future__ import annotations
 
-import codecs
 import json
 import re
-import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse as StarletteStreamingResponse
-from app.api.streaming_response import RequestStreamingResponse as StreamingResponse
+from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse as StarletteStreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api import chat as chat_api
-from app.core.chat_job import PROTOCOL_ANTHROPIC_MESSAGES, iter_openai_sse_payloads, job_for, use_chat_job
+from app.api.deps import verify_service_token
 from app.api.openai_stop import (
     find_first_stop_sequence,
     normalize_openai_stop_sequences,
     split_stream_text_for_stop_sequences,
 )
-from app.api.deps import verify_service_token
+from app.api.streaming_response import RequestStreamingResponse as StreamingResponse
+from app.core.chat_job import PROTOCOL_ANTHROPIC_MESSAGES, iter_openai_sse_payloads, job_for, use_chat_job
 from app.core.config import get_logger
 from app.services.request_manager import request_manager
-from app.services.sse_utils import sse_frame_data_text
 from app.services.tool_calling import _decode_tool_arguments
 
 logger = get_logger("API.ANTHROPIC")
@@ -209,7 +207,7 @@ def _content_value_to_openai_parts(value: Any) -> List[Dict[str, Any]]:
 
 
 def _anthropic_block_to_openai_part(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    from app.utils.attachments import normalize_attachment_part, AttachmentError
+    from app.utils.attachments import AttachmentError, normalize_attachment_part
     try:
         attachment = normalize_attachment_part(block)
     except AttachmentError as exc:

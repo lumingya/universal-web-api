@@ -8,17 +8,19 @@ app/api/routes.py - API 路由聚合入口
 
 from fastapi import APIRouter
 
+from app.api.adapter_routes import router as adapter_router  # R1-3 站点适配器在线更新
+from app.api.admin import router as admin_router  # 面板管理端点（标签页池 / 预设）
+from app.api.anthropic_routes import router as anthropic_router
+from app.api.browser_routes import router as browser_router
+
 # 导入子路由
 from app.api.chat import router as chat_router
-from app.api.anthropic_routes import router as anthropic_router
+from app.api.cmd_routes import router as cmd_router  # 🆕 命令系统
 from app.api.config_routes import router as config_router
+from app.api.metrics_routes import router as metrics_router  # R2-7 Prometheus 指标
+from app.api.provider import router as provider_router
 from app.api.system import router as system_router
 from app.api.tab_routes import router as tab_router
-from app.api.cmd_routes import router as cmd_router  # 🆕 命令系统
-from app.api.browser_routes import router as browser_router
-from app.api.provider import router as provider_router
-from app.api.adapter_routes import router as adapter_router  # R1-3 站点适配器在线更新
-from app.api.metrics_routes import router as metrics_router  # R2-7 Prometheus 指标
 
 # 创建主路由器
 router = APIRouter()
@@ -34,3 +36,4 @@ router.include_router(browser_router)
 router.include_router(provider_router)
 router.include_router(adapter_router)
 router.include_router(metrics_router)
+router.include_router(admin_router)

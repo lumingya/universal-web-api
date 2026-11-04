@@ -11,12 +11,12 @@ app/core/elements.py - 元素查找和缓存
 - app.core.config（BrowserConstants, logger）
 """
 
-import time
 import hashlib
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from app.core.config import BrowserConstants, get_tutorial_selectors_url, logger
+from app.core.config import BrowserConstants, logger
 from app.core.driver import driver_for_tab
 
 _ELEMENT_TIMING_LOG_THRESHOLD = 0.5
@@ -159,7 +159,7 @@ class ElementFinder:
                 ele = driver_for_tab(self.tab).find(selector, timeout=timeout)
             else:
                 ele = driver_for_tab(self.tab).find(f'css:{selector}', timeout=timeout)
-            
+
             # 更可靠的检查
             if ele and hasattr(ele, 'tag') and ele.tag:
                 return ele
@@ -270,7 +270,6 @@ class ElementFinder:
             return ele
 
         deadline = time.perf_counter() + total_timeout
-        is_first_round = True
 
         while True:
             for group in groups:
@@ -292,7 +291,6 @@ class ElementFinder:
                 if is_valid:
                     return ele
 
-            is_first_round = False
             if time.perf_counter() >= deadline:
                 break
             time.sleep(0.05)
@@ -355,7 +353,6 @@ class ElementFinder:
 
         total_timeout = max(0.02, float(timeout or 0.0))
         deadline = time.perf_counter() + total_timeout
-        is_first_round = True
 
         while True:
             for group in groups:
@@ -370,7 +367,6 @@ class ElementFinder:
                     return ele
                 candidates.append(ele)
 
-            is_first_round = False
             if candidates or time.perf_counter() >= deadline:
                 break
             time.sleep(0.05)
@@ -391,17 +387,17 @@ class ElementFinder:
     def find(self, selector: str, timeout: float = None) -> Optional[Any]:
         """
         查找单个元素（公开方法）
-        
+
         参数:
             selector: 选择器（支持 CSS、XPath、DrissionPage 语法）
             timeout: 超时时间（秒），默认使用配置值
-        
+
         返回:
             找到的元素，或 None
         """
         if timeout is None:
             timeout = BrowserConstants.DEFAULT_ELEMENT_TIMEOUT
-        
+
         # 检查缓存
         cache_key = selector
         if cache_key in self._cache:
@@ -411,7 +407,7 @@ class ElementFinder:
             else:
                 # 缓存失效，删除
                 del self._cache[cache_key]
-        
+
         raw_selector = selector.strip() if isinstance(selector, str) else ""
         if raw_selector.startswith("css:"):
             raw_selector = raw_selector[4:].strip()
@@ -430,7 +426,7 @@ class ElementFinder:
             ele = self._find_with_syntax(selector, 0.05)
         if ele and not self._is_visible_enabled(ele):
             ele = None
-        
+
         # 缓存有效元素
         if ele:
             content_hash = self._compute_element_hash(ele)
@@ -440,23 +436,23 @@ class ElementFinder:
                 cached_at=time.time(),
                 content_hash=content_hash
             )
-        
+
         return ele
 
     def find_all(self, selector: str, timeout: float = None) -> List[Any]:
         """
         查找所有匹配的元素
-        
+
         参数:
             selector: 选择器
             timeout: 超时时间（秒）
-        
+
         返回:
             元素列表（可能为空）
         """
         if timeout is None:
             timeout = BrowserConstants.DEFAULT_ELEMENT_TIMEOUT
-        
+
         return self._find_all_with_syntax(selector, timeout)
 
     def _find_all_with_syntax(self, selector: str, timeout: float) -> List[Any]:
@@ -475,12 +471,12 @@ class ElementFinder:
                            timeout: float = None) -> Optional[Any]:
         """
         带回退机制的元素查找
-        
+
         参数:
             primary_selector: 主选择器
             target_key: 目标键名（用于回退选择器）
             timeout: 超时时间
-        
+
         返回:
             找到的元素，或 None
         """
@@ -498,7 +494,7 @@ class ElementFinder:
                     content_hash=self._compute_element_hash(ele),
                 )
             return ele
-        
+
         # 先尝试主选择器
         if primary_selector:
             started_at = time.perf_counter()

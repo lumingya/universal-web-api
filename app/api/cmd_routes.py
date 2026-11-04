@@ -13,16 +13,16 @@ import json
 import time
 import uuid
 from pathlib import Path
-from typing import Optional, List
+from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.core.config import get_logger
 from app.api.deps import verify_dashboard_auth as verify_auth
+from app.core.config import get_logger
 from app.services.command_engine import command_engine
 from app.services.command_result_store import clear_command_results, list_command_results
-from app.services.request_manager import request_manager, RequestStatus
+from app.services.request_manager import RequestStatus, request_manager
 
 logger = get_logger("API.CMD")
 
@@ -432,9 +432,9 @@ async def upload_command_image(
         raise HTTPException(status_code=400, detail="图片必须小于 25 MB")
 
     try:
-        from PIL import Image
-
         from io import BytesIO
+
+        from PIL import Image
 
         with Image.open(BytesIO(payload)) as image:
             image.verify()

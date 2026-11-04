@@ -9,8 +9,7 @@ app/services/text_filter.py - 通用响应文本清理与过滤器管道
 from __future__ import annotations
 
 import re
-from typing import Any, List, Optional, Pattern, Sequence, Union
-
+from typing import List, Optional, Pattern, Sequence, Union
 
 # 默认的媒体生成占位符正则列表（如 Gemini / Google 等平台在生成媒体时的临时 URL 占位行）
 DEFAULT_MEDIA_PLACEHOLDER_PATTERNS: List[Pattern[str]] = [
@@ -29,7 +28,7 @@ def sanitize_response_text(
     strip_consecutive_newlines: bool = True,
 ) -> str:
     """Clean and normalize full assistant response text.
-    
+
     1. Removes known platform temporary/placeholder URL lines.
     2. Compresses 3+ consecutive newlines into 2.
     3. Truncates text based on requested stop sequences.

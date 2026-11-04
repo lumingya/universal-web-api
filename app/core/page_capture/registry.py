@@ -10,7 +10,6 @@ from app.core.config import SSEFormatter, logger
 
 from .base import InteractionSlot, PageFetchCapture
 
-
 _CAPTURE_CLASSES: Dict[str, Type[PageFetchCapture]] = {}
 
 

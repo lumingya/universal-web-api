@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlsplit
 
 from app.core.config import logger
+from app.core.driver import driver_for_tab
 from app.utils.site_url import (
     encode_tab_url_route_token,
     extract_remote_site_domain,
@@ -13,7 +14,6 @@ from app.utils.site_url import (
 )
 
 from ._utils import _TAB_HEALTH_CACHE_TTL_SEC, _should_skip_pool_url
-from app.core.driver import driver_for_tab
 
 
 class TabStatus(Enum):

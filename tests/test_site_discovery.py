@@ -6,9 +6,10 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+
 from app.services.config.engine import ConfigEngine
 from app.services.config.processors import AIAnalyzer
-from app.utils.site_discovery import automatic_discovery_allowed, admitted_selectors, selectors_match_chat_html
+from app.utils.site_discovery import admitted_selectors, automatic_discovery_allowed, selectors_match_chat_html
 from app.utils.site_rules import _normalize_rule
 
 GOOD={'input_box':'textarea#composer','send_btn':'button.send','result_container':'.assistant-reply'}

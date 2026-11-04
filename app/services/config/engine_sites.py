@@ -5,30 +5,32 @@
 """
 
 import copy
-from typing import Dict, Optional, List, Any, Set, Union, Callable
+from typing import Any, Callable, Dict, List, Optional, Set, Union
 from urllib.parse import urljoin
+
 from app.models.schemas import (
-    SiteConfig,
-    SelectorDefinition,
     ADVANCED_FIELDS,
     PRESET_ADVANCED_FIELDS,
     SITE_ADVANCED_FIELDS,
-    get_default_image_extraction_config,
+    SelectorDefinition,
+    SiteConfig,
     get_default_file_paste_config,
+    get_default_image_extraction_config,
     get_default_prompt_padding_config,
     get_default_site_advanced_config,
 )
-from app.utils.site_rules import derive_site_card_id, get_site_rule
 from app.utils.site_discovery import (
     automatic_discovery_allowed,
-    specific_chat_selectors,
     selectors_match_chat_html,
+    specific_chat_selectors,
 )
+from app.utils.site_rules import derive_site_card_id, get_site_rule
+
 from .engine_common import (
-    DEFAULT_PRESET_NAME,
-    DEFAULT_WORKFLOW,
     _MISSING,
     _SITE_STARTUP_JS_PATTERNS,
+    DEFAULT_PRESET_NAME,
+    DEFAULT_WORKFLOW,
     _coerce_bool,
     get_default_stream_config,
     logger,

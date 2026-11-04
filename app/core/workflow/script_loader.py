@@ -10,15 +10,15 @@ app/core/workflow/script_loader.py - 通用工作流 JavaScript 脚本加载与�
 6. 100% 向后兼容传统内联 JS 字符串
 """
 
+import hashlib
 import json
 import os
 import re
 import time
-import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.core.config import get_logger, WorkflowError
+from app.core.config import WorkflowError, get_logger
 
 logger = get_logger("WORKFLOW.SCRIPT_LOADER")
 

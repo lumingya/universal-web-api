@@ -10,15 +10,16 @@ app/services/error_metadata.py - 标准异常元数据与响应构建器
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional, Set, Tuple
+
 from fastapi.responses import JSONResponse
 
-from app.services.arena_image_generation import (
+# 直接依赖叶子常量模块，避免经由 arena_send_watchdog / arena_image_generation
+# 反向依赖回 app.core，从而断开 core <-> services 的导入环。
+from app.core.error_codes import (
     ARENA_NON_RETRYABLE_CODES,
-    ARENA_PROMPT_REJECTED_CODE,
-)
-from app.core.workflow.arena_send_watchdog import (
     ARENA_PAGE_ERROR,
+    ARENA_PROMPT_REJECTED_CODE,
     ARENA_SEND_NO_TARGET_AFTER_RETRY,
 )
 
@@ -150,6 +151,253 @@ def _extract_status_code_from_text(text: str) -> Optional[int]:
     return None
 
 
+# HTTP 状态码 -> (code, error_type, retryable) 的查表。
+#
+# 原为 _metadata_from_text 里四段 if（429 / {400,422} / {401,403} / >=500），
+# 互相之间没有重叠，因此查表与逐条比较等价。5xx 是范围而非精确值，单独
+# 用 _SERVER_ERROR_MIN_STATUS + _SERVER_ERROR_SPEC 处理。
+#
+# 未在表内的 4xx（如 404、409）不在此处产出元数据，继续走后面的
+# "普通纯字符串"兜底——这是既有行为，改动时不要顺手"补全"。
+_HTTP_STATUS_ERROR_SPECS: Dict[int, Tuple[str, str, bool]] = {
+    400: ("bad_request", "invalid_request_error", False),
+    401: ("permission_denied", "permission_error", False),
+    403: ("permission_denied", "permission_error", False),
+    422: ("unprocessable_entity", "invalid_request_error", False),
+    429: ("rate_limit_exceeded", "rate_limit_error", False),
+}
+
+_SERVER_ERROR_MIN_STATUS = 500
+_SERVER_ERROR_SPEC: Tuple[str, str, bool] = ("upstream_service_error", "api_error", True)
+
+def _metadata_from_exception(
+    reason_or_payload: Any,
+    default_message: Optional[str] = None,
+) -> Optional[ErrorMetadata]:
+    """解析 isinstance(reason_or_payload, BaseException) 形式的错误来源。
+
+    从 resolve_error_metadata 中按输入类型原样提出，方法体与提取前
+    逐字节相同（仅缩进变化）。
+    """
+    code = getattr(reason_or_payload, "code", None) or getattr(reason_or_payload, "error_code", None)
+    msg = (
+        getattr(reason_or_payload, "message", None)
+        or getattr(reason_or_payload, "error_msg", None)
+        or str(reason_or_payload)
+    )
+    if code:
+        return resolve_error_metadata(str(code), default_message=str(msg))
+    return resolve_error_metadata(str(reason_or_payload), default_message=default_message)
+
+def _metadata_from_cancel_reason(
+    reason_or_payload: Any,
+    default_message: Optional[str] = None,
+) -> Optional[ErrorMetadata]:
+    """解析 hasattr(reason_or_payload, 'cancel_reason') 形式的错误来源。
+
+    从 resolve_error_metadata 中按输入类型原样提出，方法体与提取前
+    逐字节相同（仅缩进变化）。
+    """
+    raw_reason = str(getattr(reason_or_payload, "cancel_reason") or "").strip()
+    if not raw_reason:
+        return None
+    if raw_reason in _CANCEL_REASONS:
+        return None
+    if raw_reason in _PROMPT_REJECTION_CODES:
+        return ErrorMetadata(
+            code=raw_reason,
+            message=default_message or "Arena 拒绝了该提示词：内容违反 Terms of Use",
+            status_code=422,
+            retryable=False,
+            error_type="invalid_request_error",
+        )
+    if raw_reason in _KNOWN_NON_RETRYABLE_CODES:
+        return ErrorMetadata(
+            code=raw_reason,
+            message=default_message or "Arena 图片生成失败，响应不可重试",
+            status_code=422,
+            retryable=False,
+            error_type="invalid_request_error",
+        )
+    return resolve_error_metadata(raw_reason, default_message=default_message)
+
+def _metadata_from_payload(
+    reason_or_payload: Any,
+    default_message: Optional[str] = None,
+) -> Optional[ErrorMetadata]:
+    """解析 isinstance(reason_or_payload, dict) 形式的错误来源。
+
+    从 resolve_error_metadata 中按输入类型原样提出，方法体与提取前
+    逐字节相同（仅缩进变化）。
+    """
+    error = reason_or_payload.get("error") if "error" in reason_or_payload else reason_or_payload
+    if isinstance(error, dict):
+        code = str(error.get("code") or "").strip()
+        msg = str(error.get("message") or "").strip()
+        raw_status_code = error.get("status_code")
+        raw_retryable = error.get("retryable")
+        param = error.get("param")
+        extra = {
+            k: v for k, v in error.items()
+            if k not in {"message", "type", "code", "status_code", "retryable", "param"}
+        }
+        status_code = _parse_int(raw_status_code, 422) if raw_status_code is not None else 422
+        retryable = _parse_bool(raw_retryable, False) if raw_retryable is not None else False
+        error_type = str(error.get("type") or "invalid_request_error").strip()
+
+        # If inner message itself contains a serialized JSON error or terminal error prefix, resolve it
+        if msg and ("{" in msg or "stream_terminal_error:" in msg):
+            nested_meta = resolve_error_metadata(msg, default_message=default_message)
+            if nested_meta:
+                merged_extra = dict(nested_meta.extra or {})
+                if extra:
+                    merged_extra.update(extra)
+                return ErrorMetadata(
+                    code=code if (code and code not in {"error", "workflow_failed", "arena_page_error"}) else nested_meta.code,
+                    message=nested_meta.message,
+                    status_code=status_code if raw_status_code is not None else nested_meta.status_code,
+                    retryable=retryable if raw_retryable is not None else nested_meta.retryable,
+                    error_type=error_type if error_type not in {"execution_error", "invalid_request_error"} else nested_meta.error_type,
+                    param=param if param is not None else nested_meta.param,
+                    extra=merged_extra or None,
+                )
+
+        if code in _PROMPT_REJECTION_CODES:
+            return ErrorMetadata(
+                code=code or ARENA_PROMPT_REJECTED_CODE,
+                message=msg or default_message or "Arena 拒绝了该提示词：内容违反 Terms of Use",
+                status_code=status_code,
+                retryable=retryable,
+                error_type=error_type,
+                param=param,
+                extra=extra or None,
+            )
+        if code in _KNOWN_NON_RETRYABLE_CODES:
+            return ErrorMetadata(
+                code=code,
+                message=msg or default_message or "Arena 图片生成失败，响应不可重试",
+                status_code=status_code,
+                retryable=retryable,
+                error_type=error_type,
+                param=param,
+                extra=extra or None,
+            )
+        if (raw_retryable is not None and not retryable) or (raw_status_code is not None and status_code in {400, 401, 403, 422}):
+            return ErrorMetadata(
+                code=code or "invalid_request_error",
+                message=msg or default_message or "请求不可重试",
+                status_code=status_code,
+                retryable=False,
+                error_type=error_type,
+                param=param,
+                extra=extra or None,
+            )
+        if msg or code:
+            return ErrorMetadata(
+                code=code or "error",
+                message=msg or default_message or "请求处理失败",
+                status_code=status_code if raw_status_code is not None else 500,
+                retryable=retryable,
+                error_type=error_type,
+                param=param,
+                extra=extra or None,
+            )
+    return None
+
+def _metadata_from_text(
+    reason_or_payload: Any,
+    default_message: Optional[str] = None,
+) -> Optional[ErrorMetadata]:
+    """解析 isinstance(reason_or_payload, str) 形式的错误来源。
+
+    从 resolve_error_metadata 中按输入类型原样提出，方法体与提取前
+    逐字节相同（仅缩进变化）。
+    """
+    raw_str = reason_or_payload.strip()
+    if not raw_str:
+        return None
+    if raw_str in _CANCEL_REASONS:
+        return None
+
+    # 剥离内部标识前缀（支持多层嵌套剥离）
+    changed = True
+    while changed:
+        changed = False
+        for prefix in ("stream_terminal_error:", "execution_error:", "执行错误:", "[错误]", "[error]"):
+            if raw_str.lower().startswith(prefix.lower()):
+                raw_str = raw_str[len(prefix):].strip()
+                changed = True
+                break
+
+    # 1. 尝试从文本中解析嵌套的 JSON 对象
+    json_obj = _extract_json_dict_from_text(raw_str)
+    if json_obj:
+        nested_error = json_obj.get("error") if isinstance(json_obj.get("error"), dict) else json_obj
+        if isinstance(nested_error, dict):
+            extracted_msg = str(nested_error.get("message") or "").strip()
+            extracted_code = str(nested_error.get("code") or "").strip()
+            extracted_type = str(nested_error.get("type") or "").strip()
+            extracted_param = nested_error.get("param")
+            extra = {
+                k: v for k, v in nested_error.items()
+                if k not in {"message", "type", "code", "status_code", "retryable", "param"}
+            }
+            detected_status = _extract_status_code_from_text(raw_str) or _parse_int(nested_error.get("status_code"), 400)
+            is_retryable = detected_status >= 500 and extracted_code not in {"moderation_blocked", "content_policy_violation"}
+
+            return ErrorMetadata(
+                code=extracted_code or "upstream_error",
+                message=extracted_msg or raw_str or (default_message or "上游服务报错"),
+                status_code=detected_status or 400,
+                retryable=is_retryable,
+                error_type=extracted_type or "invalid_request_error",
+                param=str(extracted_param) if extracted_param is not None else None,
+                extra=extra or None,
+            )
+
+    # 2. 检查已知错误代码
+    if raw_str in _PROMPT_REJECTION_CODES:
+        return ErrorMetadata(
+            code=raw_str,
+            message=default_message or "Arena 拒绝了该提示词：内容违反 Terms of Use",
+            status_code=422,
+            retryable=False,
+            error_type="invalid_request_error",
+        )
+    if raw_str in _KNOWN_NON_RETRYABLE_CODES:
+        return ErrorMetadata(
+            code=raw_str,
+            message=default_message or "Arena 图片生成失败，响应不可重试",
+            status_code=422,
+            retryable=False,
+            error_type="invalid_request_error",
+        )
+
+    # 3. 检查是否含有 HTTP 状态码
+    status_code = _extract_status_code_from_text(raw_str)
+    if status_code is not None:
+        spec = _HTTP_STATUS_ERROR_SPECS.get(status_code)
+        if spec is None and status_code >= _SERVER_ERROR_MIN_STATUS:
+            spec = _SERVER_ERROR_SPEC
+        if spec is not None:
+            code, error_type, retryable = spec
+            return ErrorMetadata(
+                code=code,
+                message=raw_str,
+                status_code=status_code,
+                retryable=retryable,
+                error_type=error_type,
+            )
+
+    # 4. 普通纯字符串
+    return ErrorMetadata(
+        code="workflow_failed",
+        message=raw_str or (default_message or "请求处理失败"),
+        status_code=500,
+        retryable=False,
+        error_type="execution_error",
+    )
+
 def resolve_error_metadata(
     reason_or_payload: Any,
     default_message: Optional[str] = None,
@@ -159,224 +407,20 @@ def resolve_error_metadata(
         return None
 
     # Handle Exception objects
+    # 按输入类型分派：各类型的解析逻辑见同名 _metadata_from_* 函数
     if isinstance(reason_or_payload, BaseException):
-        code = getattr(reason_or_payload, "code", None) or getattr(reason_or_payload, "error_code", None)
-        msg = (
-            getattr(reason_or_payload, "message", None)
-            or getattr(reason_or_payload, "error_msg", None)
-            or str(reason_or_payload)
-        )
-        if code:
-            return resolve_error_metadata(str(code), default_message=str(msg))
-        return resolve_error_metadata(str(reason_or_payload), default_message=default_message)
+        return _metadata_from_exception(reason_or_payload, default_message)
 
-    # Handle RequestContext-like objects
     if hasattr(reason_or_payload, "cancel_reason"):
-        raw_reason = str(getattr(reason_or_payload, "cancel_reason") or "").strip()
-        if not raw_reason:
-            return None
-        if raw_reason in _CANCEL_REASONS:
-            return None
-        if raw_reason in _PROMPT_REJECTION_CODES:
-            return ErrorMetadata(
-                code=raw_reason,
-                message=default_message or "Arena 拒绝了该提示词：内容违反 Terms of Use",
-                status_code=422,
-                retryable=False,
-                error_type="invalid_request_error",
-            )
-        if raw_reason in _KNOWN_NON_RETRYABLE_CODES:
-            return ErrorMetadata(
-                code=raw_reason,
-                message=default_message or "Arena 图片生成失败，响应不可重试",
-                status_code=422,
-                retryable=False,
-                error_type="invalid_request_error",
-            )
-        return resolve_error_metadata(raw_reason, default_message=default_message)
+        return _metadata_from_cancel_reason(reason_or_payload, default_message)
 
-    # Handle payload dict like {"error": {...}} or SSE payload dict
     if isinstance(reason_or_payload, dict):
-        error = reason_or_payload.get("error") if "error" in reason_or_payload else reason_or_payload
-        if isinstance(error, dict):
-            code = str(error.get("code") or "").strip()
-            msg = str(error.get("message") or "").strip()
-            raw_status_code = error.get("status_code")
-            raw_retryable = error.get("retryable")
-            param = error.get("param")
-            extra = {
-                k: v for k, v in error.items()
-                if k not in {"message", "type", "code", "status_code", "retryable", "param"}
-            }
-            status_code = _parse_int(raw_status_code, 422) if raw_status_code is not None else 422
-            retryable = _parse_bool(raw_retryable, False) if raw_retryable is not None else False
-            error_type = str(error.get("type") or "invalid_request_error").strip()
+        return _metadata_from_payload(reason_or_payload, default_message)
 
-            # If inner message itself contains a serialized JSON error or terminal error prefix, resolve it
-            if msg and ("{" in msg or "stream_terminal_error:" in msg):
-                nested_meta = resolve_error_metadata(msg, default_message=default_message)
-                if nested_meta:
-                    merged_extra = dict(nested_meta.extra or {})
-                    if extra:
-                        merged_extra.update(extra)
-                    return ErrorMetadata(
-                        code=code if (code and code not in {"error", "workflow_failed", "arena_page_error"}) else nested_meta.code,
-                        message=nested_meta.message,
-                        status_code=status_code if raw_status_code is not None else nested_meta.status_code,
-                        retryable=retryable if raw_retryable is not None else nested_meta.retryable,
-                        error_type=error_type if error_type not in {"execution_error", "invalid_request_error"} else nested_meta.error_type,
-                        param=param if param is not None else nested_meta.param,
-                        extra=merged_extra or None,
-                    )
-
-            if code in _PROMPT_REJECTION_CODES:
-                return ErrorMetadata(
-                    code=code or ARENA_PROMPT_REJECTED_CODE,
-                    message=msg or default_message or "Arena 拒绝了该提示词：内容违反 Terms of Use",
-                    status_code=status_code,
-                    retryable=retryable,
-                    error_type=error_type,
-                    param=param,
-                    extra=extra or None,
-                )
-            if code in _KNOWN_NON_RETRYABLE_CODES:
-                return ErrorMetadata(
-                    code=code,
-                    message=msg or default_message or "Arena 图片生成失败，响应不可重试",
-                    status_code=status_code,
-                    retryable=retryable,
-                    error_type=error_type,
-                    param=param,
-                    extra=extra or None,
-                )
-            if (raw_retryable is not None and not retryable) or (raw_status_code is not None and status_code in {400, 401, 403, 422}):
-                return ErrorMetadata(
-                    code=code or "invalid_request_error",
-                    message=msg or default_message or "请求不可重试",
-                    status_code=status_code,
-                    retryable=False,
-                    error_type=error_type,
-                    param=param,
-                    extra=extra or None,
-                )
-            if msg or code:
-                return ErrorMetadata(
-                    code=code or "error",
-                    message=msg or default_message or "请求处理失败",
-                    status_code=status_code if raw_status_code is not None else 500,
-                    retryable=retryable,
-                    error_type=error_type,
-                    param=param,
-                    extra=extra or None,
-                )
-        return None
-
-    # Handle string code / error message
     if isinstance(reason_or_payload, str):
-        raw_str = reason_or_payload.strip()
-        if not raw_str:
-            return None
-        if raw_str in _CANCEL_REASONS:
-            return None
+        return _metadata_from_text(reason_or_payload, default_message)
 
-        # 剥离内部标识前缀（支持多层嵌套剥离）
-        changed = True
-        while changed:
-            changed = False
-            for prefix in ("stream_terminal_error:", "execution_error:", "执行错误:", "[错误]", "[error]"):
-                if raw_str.lower().startswith(prefix.lower()):
-                    raw_str = raw_str[len(prefix):].strip()
-                    changed = True
-                    break
-
-        # 1. 尝试从文本中解析嵌套的 JSON 对象
-        json_obj = _extract_json_dict_from_text(raw_str)
-        if json_obj:
-            nested_error = json_obj.get("error") if isinstance(json_obj.get("error"), dict) else json_obj
-            if isinstance(nested_error, dict):
-                extracted_msg = str(nested_error.get("message") or "").strip()
-                extracted_code = str(nested_error.get("code") or "").strip()
-                extracted_type = str(nested_error.get("type") or "").strip()
-                extracted_param = nested_error.get("param")
-                extra = {
-                    k: v for k, v in nested_error.items()
-                    if k not in {"message", "type", "code", "status_code", "retryable", "param"}
-                }
-                detected_status = _extract_status_code_from_text(raw_str) or _parse_int(nested_error.get("status_code"), 400)
-                is_retryable = detected_status >= 500 and extracted_code not in {"moderation_blocked", "content_policy_violation"}
-                
-                return ErrorMetadata(
-                    code=extracted_code or "upstream_error",
-                    message=extracted_msg or raw_str or (default_message or "上游服务报错"),
-                    status_code=detected_status or 400,
-                    retryable=is_retryable,
-                    error_type=extracted_type or "invalid_request_error",
-                    param=str(extracted_param) if extracted_param is not None else None,
-                    extra=extra or None,
-                )
-
-        # 2. 检查已知错误代码
-        if raw_str in _PROMPT_REJECTION_CODES:
-            return ErrorMetadata(
-                code=raw_str,
-                message=default_message or "Arena 拒绝了该提示词：内容违反 Terms of Use",
-                status_code=422,
-                retryable=False,
-                error_type="invalid_request_error",
-            )
-        if raw_str in _KNOWN_NON_RETRYABLE_CODES:
-            return ErrorMetadata(
-                code=raw_str,
-                message=default_message or "Arena 图片生成失败，响应不可重试",
-                status_code=422,
-                retryable=False,
-                error_type="invalid_request_error",
-            )
-
-        # 3. 检查是否含有 HTTP 状态码
-        status_code = _extract_status_code_from_text(raw_str)
-        if status_code is not None:
-            if status_code == 429:
-                return ErrorMetadata(
-                    code="rate_limit_exceeded",
-                    message=raw_str,
-                    status_code=429,
-                    retryable=False,
-                    error_type="rate_limit_error",
-                )
-            if status_code in {400, 422}:
-                return ErrorMetadata(
-                    code="bad_request" if status_code == 400 else "unprocessable_entity",
-                    message=raw_str,
-                    status_code=status_code,
-                    retryable=False,
-                    error_type="invalid_request_error",
-                )
-            if status_code in {401, 403}:
-                return ErrorMetadata(
-                    code="permission_denied",
-                    message=raw_str,
-                    status_code=status_code,
-                    retryable=False,
-                    error_type="permission_error",
-                )
-            if status_code >= 500:
-                return ErrorMetadata(
-                    code="upstream_service_error",
-                    message=raw_str,
-                    status_code=status_code,
-                    retryable=True,
-                    error_type="api_error",
-                )
-
-        # 4. 普通纯字符串
-        return ErrorMetadata(
-            code="workflow_failed",
-            message=raw_str or (default_message or "请求处理失败"),
-            status_code=500,
-            retryable=False,
-            error_type="execution_error",
-        )
+    return None
 
     return None
 

@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 from app.core.browser.media import BrowserMediaMixin
@@ -543,8 +542,9 @@ def test_image_extractor_distinguishes_different_data_uris_sharing_long_prefix()
 
 
 def test_persist_remote_media_urls_to_local_uses_image_config_timeout(tmp_path) -> None:
+    from unittest.mock import MagicMock, patch
+
     from app.core.browser.media import BrowserMediaMixin
-    from unittest.mock import patch, MagicMock
 
     harness = BrowserMediaMixin()
     tab = MagicMock()
@@ -581,8 +581,9 @@ def test_persist_remote_media_urls_to_local_uses_image_config_timeout(tmp_path) 
 
 
 def test_persist_remote_media_urls_to_local_uses_signed_public_partition_for_r2_url(tmp_path) -> None:
+    from unittest.mock import MagicMock, patch
+
     from app.core.browser.media import BrowserMediaMixin
-    from unittest.mock import patch, MagicMock
 
     harness = BrowserMediaMixin()
     tab = MagicMock()
@@ -639,3 +640,86 @@ def test_merge_dom_and_stream_media_items_retains_multiple_stream_audios() -> No
 
 
 
+
+
+def test_blind_late_image_wait_captures_image_without_explicit_signal(monkeypatch) -> None:
+    """无显式占位信号时，请求本身像图片生成也应触发延迟盲等并拿到结果。
+
+    这是 `_extract_media_after_stream` 中 "should_probe_late_image_render" 分支的
+    正向路径表征：没有 pending 信号、响应文本很短、请求像图片生成。
+    """
+    candidate = _Candidate("", fresh=True, text="")
+
+    class _Finder:
+        def __init__(self, tab):
+            self.tab = tab
+
+        def find_all(self, selector, timeout):
+            return [candidate]
+
+    class _LateImageExtractor:
+        calls = 0
+
+        def extract_media(self, target, config, container_selector_fallback):
+            self.calls += 1
+            if self.calls < 2:
+                return []
+            return [_item("image", "https://example.test/late.png", "dom")]
+
+        @staticmethod
+        def extract_text(target):
+            return target.text
+
+    extractor = _LateImageExtractor()
+    monkeypatch.setattr("app.core.elements.ElementFinder", _Finder)
+    monkeypatch.setattr("app.core.browser.media.time.sleep", lambda _seconds: None)
+
+    result = _BaselineMediaHarness()._extract_media_after_stream(
+        tab=object(),
+        extractor=extractor,
+        image_config=_image_config("on_signal"),
+        result_selector=".reply",
+        request_text_hint="generate an image of a city",
+        response_text_hint="ok",
+        media_dom_baseline=_baseline(),
+    )
+
+    assert extractor.calls >= 2
+    assert [(item["media_type"], item["url"]) for item in result] == [
+        ("image", "https://example.test/late.png")
+    ]
+
+
+def test_pending_kinds_wait_warns_when_never_satisfied(monkeypatch, caplog) -> None:
+    """pending 信号存在但始终未渲染出结果时应记录超时告警。"""
+    candidate = _Candidate("", fresh=True, text="正在生成视频...")
+
+    class _Finder:
+        def __init__(self, tab):
+            self.tab = tab
+
+        def find_all(self, selector, timeout):
+            return [candidate]
+
+    class _EmptyExtractor:
+        def extract_media(self, target, config, container_selector_fallback):
+            return []
+
+        @staticmethod
+        def extract_text(target):
+            return target.text
+
+    monkeypatch.setattr("app.core.elements.ElementFinder", _Finder)
+    monkeypatch.setattr("app.core.browser.media.time.sleep", lambda _seconds: None)
+
+    with caplog.at_level("WARNING", logger="app.core.browser.media"):
+        result = _BaselineMediaHarness()._extract_media_after_stream(
+            tab=object(),
+            extractor=_EmptyExtractor(),
+            image_config=_video_config("on_signal"),
+            result_selector=".reply",
+            response_text_hint="正在生成视频，这可能需要几分钟时间。",
+        )
+
+    assert result == []
+    assert "等待待渲染媒体超时" in caplog.text

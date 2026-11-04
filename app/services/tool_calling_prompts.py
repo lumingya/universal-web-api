@@ -4,10 +4,8 @@ Prompt-building helpers for tool-calling.
 
 from __future__ import annotations
 
-import copy
 import html
 import json
-import math
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,21 +13,19 @@ from app.services.tool_calling_common import (
     _PREFERRED_XML_CALL_TAG,
     _PREFERRED_XML_WRAPPER_TAG,
     _debug_preview,
+    _decorate_prompt_lines,
     _describe_tool_choice,
     _extract_schema_types,
     _format_tool_result_message,
+    _get_tool_calling_prompt_padding_enabled,
+    _get_tool_calling_prompt_padding_obfuscation_enabled,
     _inject_zero_width_noise,
     _json_dumps_safe,
     _prepare_tool_result_content,
     _sanitize_tool_result_content,
     _serialize_content,
-    get_tool_calling_allow_media_postprocess,
-    get_tool_calling_sanitize_assistant_content_enabled,
     logger,
     normalize_chat_role,
-    _decorate_prompt_lines,
-    _get_tool_calling_prompt_padding_enabled,
-    _get_tool_calling_prompt_padding_obfuscation_enabled,
 )
 
 

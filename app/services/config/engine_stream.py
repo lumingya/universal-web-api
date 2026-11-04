@@ -5,15 +5,17 @@
 """
 
 import copy
-from typing import Dict, Optional, List, Any
+from typing import Any, Dict, List, Optional
+
 from app.core.parsers import ParserRegistry
+from app.core.request_transport import normalize_request_transport_config
 from app.models.schemas import get_default_attachment_monitor_config, get_default_send_confirmation_config
 from app.services.extractor_manager import extractor_manager
 from app.services.parser_manager import parser_manager
-from app.core.request_transport import normalize_request_transport_config
+
 from .engine_common import (
-    DEFAULT_PRESET_NAME,
     _MISSING,
+    DEFAULT_PRESET_NAME,
     _coerce_bool,
     _merge_config_patch,
     get_default_network_config,

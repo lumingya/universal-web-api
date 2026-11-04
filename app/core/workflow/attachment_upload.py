@@ -14,10 +14,10 @@ from enum import Enum
 from pathlib import Path
 
 from app.core.config import WorkflowError
-from app.core.tab_pool import get_clipboard_lock
-from app.utils.attachments import attachment_config, type_allowed, MIB
-from app.utils.platform import get_primary_modifier_key
 from app.core.driver import as_element, driver_for_tab
+from app.core.tab_pool import get_clipboard_lock
+from app.utils.attachments import MIB, attachment_config, type_allowed
+from app.utils.platform import get_primary_modifier_key
 
 
 class DispatchState(str, Enum):
@@ -133,8 +133,12 @@ return true;
             return DispatchResult(DispatchState.UNKNOWN, "js_drop", "drop_acknowledgement_missing")
 
     def _clipboard(self, path, mime, image=False):
-        from app.utils.system_clipboard import (copy_file_to_native_clipboard, copy_image_to_native_clipboard,
-                                                ClipboardUnsupportedError, ClipboardDependencyError)
+        from app.utils.system_clipboard import (
+            ClipboardDependencyError,
+            ClipboardUnsupportedError,
+            copy_file_to_native_clipboard,
+            copy_image_to_native_clipboard,
+        )
         name = "image_clipboard" if image else "file_clipboard"
         if image and not mime.startswith("image/"):
             return DispatchResult(DispatchState.NOT_DISPATCHED, name)

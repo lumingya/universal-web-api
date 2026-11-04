@@ -1,0 +1,429 @@
+{
+ "_comment": "app.routes 的对外 URL 快照；重构时不应变化。更新：python tests/test_route_table.py --update",
+ "routes": {
+  "/": [
+   "GET"
+  ],
+  "/api/adapters/health": [
+   "GET"
+  ],
+  "/api/adapters/lint": [
+   "GET"
+  ],
+  "/api/adapters/updates": [
+   "GET"
+  ],
+  "/api/adapters/updates/apply": [
+   "POST"
+  ],
+  "/api/browser/open-profile-url": [
+   "POST"
+  ],
+  "/api/command-groups": [
+   "GET",
+   "PUT"
+  ],
+  "/api/command-groups/{group_name}": [
+   "DELETE"
+  ],
+  "/api/command-groups/{group_name}/duplicate": [
+   "POST"
+  ],
+  "/api/command-groups/{group_name}/enabled": [
+   "PUT"
+  ],
+  "/api/command-groups/{group_name}/execute": [
+   "POST"
+  ],
+  "/api/command-groups/{group_name}/rename": [
+   "PUT"
+  ],
+  "/api/commands": [
+   "GET",
+   "POST"
+  ],
+  "/api/commands/assets/image": [
+   "POST"
+  ],
+  "/api/commands/enabled": [
+   "PUT"
+  ],
+  "/api/commands/meta": [
+   "GET"
+  ],
+  "/api/commands/reorder": [
+   "PUT"
+  ],
+  "/api/commands/states": [
+   "GET"
+  ],
+  "/api/commands/{command_id}": [
+   "DELETE",
+   "GET",
+   "PUT"
+  ],
+  "/api/commands/{command_id}/duplicate": [
+   "POST"
+  ],
+  "/api/commands/{command_id}/results": [
+   "DELETE",
+   "GET"
+  ],
+  "/api/commands/{command_id}/test": [
+   "POST"
+  ],
+  "/api/config": [
+   "GET",
+   "POST"
+  ],
+  "/api/config/compare-main-summary": [
+   "GET"
+  ],
+  "/api/config/workflow/script-content": [
+   "GET"
+  ],
+  "/api/config/workflow/scripts": [
+   "GET"
+  ],
+  "/api/config/{domain}": [
+   "DELETE",
+   "GET"
+  ],
+  "/api/debug/cancel-current": [
+   "POST"
+  ],
+  "/api/debug/force-release": [
+   "POST"
+  ],
+  "/api/debug/request-status": [
+   "GET"
+  ],
+  "/api/debug/test-selector": [
+   "POST"
+  ],
+  "/api/extractors": [
+   "GET"
+  ],
+  "/api/extractors/default": [
+   "PUT"
+  ],
+  "/api/extractors/export": [
+   "GET"
+  ],
+  "/api/extractors/import": [
+   "POST"
+  ],
+  "/api/extractors/verify": [
+   "POST"
+  ],
+  "/api/file-paste/batch": [
+   "PUT"
+  ],
+  "/api/file-paste/configs": [
+   "GET"
+  ],
+  "/api/image-presets": [
+   "GET"
+  ],
+  "/api/image-presets/reload": [
+   "POST"
+  ],
+  "/api/logs": [
+   "DELETE",
+   "GET"
+  ],
+  "/api/parsers": [
+   "GET"
+  ],
+  "/api/pool/status": [
+   "GET"
+  ],
+  "/api/presets/{domain}": [
+   "GET",
+   "POST"
+  ],
+  "/api/presets/{domain}/default": [
+   "PUT"
+  ],
+  "/api/presets/{domain}/rename": [
+   "PUT"
+  ],
+  "/api/presets/{domain}/{preset_name}": [
+   "DELETE"
+  ],
+  "/api/settings/backup": [
+   "GET",
+   "POST"
+  ],
+  "/api/settings/browser-constants": [
+   "GET",
+   "POST"
+  ],
+  "/api/settings/env": [
+   "GET",
+   "POST"
+  ],
+  "/api/settings/image-extraction-defaults": [
+   "GET"
+  ],
+  "/api/settings/selector-definitions": [
+   "GET",
+   "POST"
+  ],
+  "/api/settings/selector-definitions/reset": [
+   "POST"
+  ],
+  "/api/settings/stream-config-defaults": [
+   "GET"
+  ],
+  "/api/settings/update-preserve": [
+   "GET",
+   "POST"
+  ],
+  "/api/sites/{domain}/advanced-config": [
+   "GET",
+   "PUT"
+  ],
+  "/api/sites/{domain}/apply-image-preset": [
+   "POST"
+  ],
+  "/api/sites/{domain}/extractor": [
+   "GET",
+   "PUT"
+  ],
+  "/api/sites/{domain}/extractor/verify": [
+   "POST"
+  ],
+  "/api/sites/{domain}/file-paste": [
+   "GET",
+   "PUT"
+  ],
+  "/api/sites/{domain}/image-config": [
+   "GET",
+   "PUT"
+  ],
+  "/api/sites/{domain}/image-config/toggle": [
+   "POST"
+  ],
+  "/api/sites/{domain}/image-preset": [
+   "GET"
+  ],
+  "/api/sites/{domain}/isolated-tab": [
+   "POST"
+  ],
+  "/api/sites/{domain}/main-branch-config": [
+   "GET"
+  ],
+  "/api/sites/{domain}/model-catalog": [
+   "GET",
+   "PUT"
+  ],
+  "/api/sites/{domain}/preset-config": [
+   "PUT"
+  ],
+  "/api/sites/{domain}/shared-tab": [
+   "POST"
+  ],
+  "/api/sites/{domain}/stream-config": [
+   "GET",
+   "PUT"
+  ],
+  "/api/sites/{domain}/workflow": [
+   "PUT"
+  ],
+  "/api/startup/controlled-browser-guide-data": [
+   "GET"
+  ],
+  "/api/system/request-history": [
+   "GET"
+  ],
+  "/api/system/request-history/{request_id}": [
+   "GET"
+  ],
+  "/api/system/stats": [
+   "GET"
+  ],
+  "/api/tab-pool/config": [
+   "PUT"
+  ],
+  "/api/tab-pool/tabs": [
+   "GET"
+  ],
+  "/api/tab-pool/tabs/{tab_index}/model-name": [
+   "PUT"
+  ],
+  "/api/tab-pool/tabs/{tab_index}/preset": [
+   "PUT"
+  ],
+  "/api/tab-pool/tabs/{tab_index}/terminate": [
+   "POST"
+  ],
+  "/api/update/check": [
+   "GET",
+   "POST"
+  ],
+  "/api/update/releases": [
+   "GET"
+  ],
+  "/api/update/status": [
+   "GET"
+  ],
+  "/api/update/switch": [
+   "POST"
+  ],
+  "/api/workflow-editor/clear-cache": [
+   "POST"
+  ],
+  "/api/workflow-editor/consume-actions": [
+   "POST"
+  ],
+  "/api/workflow-editor/inject": [
+   "POST"
+  ],
+  "/api/workflow-editor/test": [
+   "POST"
+  ],
+  "/api/workflow/preview": [
+   "POST"
+  ],
+  "/api/workflow/validate": [
+   "POST"
+  ],
+  "/dashboard": [
+   "GET"
+  ],
+  "/group/{group_id}/v1/chat/completions": [
+   "POST"
+  ],
+  "/group/{group_id}/v1/models": [
+   "GET"
+  ],
+  "/group/{group_id}/{preset_name}/v1/chat/completions": [
+   "POST"
+  ],
+  "/group/{group_id}/{preset_name}/v1/models": [
+   "GET"
+  ],
+  "/health": [
+   "GET"
+  ],
+  "/media/{filename}": [
+   "GET"
+  ],
+  "/metrics": [
+   "GET"
+  ],
+  "/model": [
+   "GET"
+  ],
+  "/models": [
+   "GET"
+  ],
+  "/openapi.json": [
+   "GET",
+   "HEAD"
+  ],
+  "/tab-url/{url_token}/v1/chat/completions": [
+   "POST"
+  ],
+  "/tab-url/{url_token}/v1/models": [
+   "GET"
+  ],
+  "/tab-url/{url_token}/{preset_name}/v1/chat/completions": [
+   "POST"
+  ],
+  "/tab-url/{url_token}/{preset_name}/v1/models": [
+   "GET"
+  ],
+  "/tab/{tab_index}/v1/chat/completions": [
+   "POST"
+  ],
+  "/tab/{tab_index}/v1/models": [
+   "GET"
+  ],
+  "/url/{route_domain}/models": [
+   "GET"
+  ],
+  "/url/{route_domain}/v1/chat/completions": [
+   "POST"
+  ],
+  "/url/{route_domain}/v1/messages": [
+   "POST"
+  ],
+  "/url/{route_domain}/v1/messages/count_tokens": [
+   "POST"
+  ],
+  "/url/{route_domain}/v1/models": [
+   "GET"
+  ],
+  "/url/{route_domain}/v1/v1/messages": [
+   "POST"
+  ],
+  "/url/{route_domain}/v1/v1/messages/count_tokens": [
+   "POST"
+  ],
+  "/url/{route_domain}/v1/v1/models": [
+   "GET"
+  ],
+  "/url/{route_domain}/{preset_name}/models": [
+   "GET"
+  ],
+  "/url/{route_domain}/{preset_name}/v1/chat/completions": [
+   "POST"
+  ],
+  "/url/{route_domain}/{preset_name}/v1/messages": [
+   "POST"
+  ],
+  "/url/{route_domain}/{preset_name}/v1/messages/count_tokens": [
+   "POST"
+  ],
+  "/url/{route_domain}/{preset_name}/v1/models": [
+   "GET"
+  ],
+  "/url/{route_domain}/{preset_name}/v1/v1/messages": [
+   "POST"
+  ],
+  "/url/{route_domain}/{preset_name}/v1/v1/messages/count_tokens": [
+   "POST"
+  ],
+  "/url/{route_domain}/{preset_name}/v1/v1/models": [
+   "GET"
+  ],
+  "/v1/chat/completions": [
+   "POST"
+  ],
+  "/v1/messages": [
+   "POST"
+  ],
+  "/v1/messages/count_tokens": [
+   "POST"
+  ],
+  "/v1/model": [
+   "GET"
+  ],
+  "/v1/models": [
+   "GET"
+  ],
+  "/v1/provider/capabilities": [
+   "GET"
+  ],
+  "/v1/provider/status": [
+   "GET"
+  ],
+  "/v1/responses": [
+   "POST"
+  ],
+  "/v1/v1/messages": [
+   "POST"
+  ],
+  "/v1/v1/messages/count_tokens": [
+   "POST"
+  ],
+  "/v1/v1/model": [
+   "GET"
+  ],
+  "/v1/v1/models": [
+   "GET"
+  ]
+ }
+}

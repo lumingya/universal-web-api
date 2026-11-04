@@ -81,8 +81,9 @@ def test_real_browser_probe_counts_css_and_xpath(real_page):
 def test_health_api_reports_unknown_site_as_404(monkeypatch):
     import asyncio
 
-    import main
     from httpx import ASGITransport, AsyncClient
+
+    import main
 
     for name in ("AUTH_ENABLED", "AUTH_TOKEN", "DASHBOARD_AUTH_ENABLED", "DASHBOARD_AUTH_TOKEN"):
         monkeypatch.delenv(name, raising=False)

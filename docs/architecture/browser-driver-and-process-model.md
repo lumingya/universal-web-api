@@ -93,7 +93,7 @@ class BrowserDriver(Protocol):       # 浏览器进程（对应现在的 Chromiu
 - **IPC**：优先用本机回环 HTTP 或 WebSocket（worker 监听 127.0.0.1 的随机端口，令牌通过环境变量传递）。与 multiprocessing Queue 相比，它跨平台行为一致，Windows 上也不受 spawn 限制，还能单独调试 worker。
   - 流式输出直接传 R2-2 的 `ChatEvent`，这正是 R2-2 把事件类型化的原因之一。
 - **边界**：API 进程只保留协议转换、鉴权、指标、配置读写；与执行相关的一切（`get_browser()`、`request_manager` 的执行部分、`command_engine` 的调度）都进入 worker。
-- **生命周期**：由 `start.py` 拉起两个进程。worker 崩溃时，API 进程对进行中的请求返回 503，并请求重启 worker，不影响 API 进程本身，也不丢配置。
+- **生命周期**：由 `main.py` 的启动引导拉起 API 进程与 worker。worker 崩溃时，API 进程对进行中的请求返回 503，并请求重启 worker，不影响 API 进程本身，也不丢配置。
   - 现有的「定时重启守护」可以简化为只重启 worker。
 - **分阶段**：
   1. 先在同一进程内，把执行入口收敛到一个可以序列化的调用面：输入是 `ChatJob` 加 `ChatRequest`，输出是 `ChatEvent` 流。

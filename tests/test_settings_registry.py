@@ -168,8 +168,9 @@ def test_dashboard_save_rejects_invalid_values_but_keeps_existing(monkeypatch):
     from fastapi import HTTPException
 
     from app.api import system
+    from app.api.system import settings as system_settings
 
-    monkeypatch.setattr(system, "_load_env_config_from_file", lambda: {"MAX_TABS": "oops"})
+    monkeypatch.setattr(system_settings, "_load_env_config_from_file", lambda: {"MAX_TABS": "oops"})
     with pytest.raises(HTTPException) as exc:
         system._validate_env_config_payload({"APP_PORT": "abc"})
     assert exc.value.status_code == 400 and "APP_PORT" in exc.value.detail

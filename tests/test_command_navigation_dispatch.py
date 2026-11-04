@@ -1,10 +1,9 @@
 import time
 from types import SimpleNamespace
 from unittest import mock
-import pytest
 
-from app.services.command_engine import CommandEngine
 from app.core.page_lifecycle import notify_page_navigated
+from app.services.command_engine import CommandEngine
 
 
 def test_is_command_applicable_on_navigation():

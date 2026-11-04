@@ -6,12 +6,25 @@
 
 import time
 import uuid
-from typing import Dict, List, Optional, Any, TYPE_CHECKING
-from app.utils.site_url import extract_remote_site_domain
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
 from app.services.command_engine_common import logger
+from app.utils.site_url import extract_remote_site_domain
 
 if TYPE_CHECKING:
-    from app.core.tab_pool import TabSession  # noqa: F401
+    from app.core.tab_pool import TabSession
+
+
+_TRIGGER_HANDLERS: Dict[str, str] = {
+    "request_count": "_trigger_request_count",
+    "error_count": "_trigger_error_count",
+    "idle_timeout": "_trigger_idle_timeout",
+    "page_check": "_trigger_page_check",
+    "command_result_match": "_trigger_command_result_match",
+    "command_check": "_trigger_command_check",
+    "command_result_event": "_trigger_command_result_event",
+    "network_request_error": "_trigger_network_request_error",
+}
 
 
 class CommandEngineTriggersMixin:
@@ -421,6 +434,319 @@ class CommandEngineTriggersMixin:
             return int(getattr(session, "request_count", 0) or 0)
         except Exception:
             return 0
+    def _trigger_request_count(
+        self,
+        command: Dict,
+        session: Any,
+        trigger: Dict,
+        trigger_type: str,
+        scope: str,
+        scope_request_count: Optional[int],
+        state: Dict,
+    ) -> bool:
+        """判定 trigger_type == "request_count" 是否触发。
+
+        从 _should_trigger 的分派链中原样提出，方法体与提取前逐字节
+        相同（仅缩进变化）。入参是全量上下文，各分支按需使用。
+        """
+        threshold = max(1, self._coerce_int(trigger.get("value", 10), 10))
+        current_count = (
+            int(scope_request_count)
+            if scope_request_count is not None
+            else self._get_scope_request_count(command, session)
+        )
+        with self._lock:
+            baseline = int(state.get("req", 0))
+            delta = current_count - baseline
+            should_fire = delta >= threshold
+            if should_fire:
+                # 先记录旧基线；若后续因标签页忙碌/超时未实际执行，可回滚以便重试。
+                state["req_prev"] = baseline
+                state["req_pending"] = True
+                state["req"] = current_count
+        logger.debug_throttled(
+            f"cmd.request_count.{command.get('id')}:{session.id}:{self._format_scope_label(scope)}",
+            f"[CMD] 请求计数检查: {command.get('name')} "
+            f"(当前={current_count}, 基线={baseline}, 增量={delta}, 阈值={threshold}, "
+            f"标签页={session.id}, 范围={self._format_scope_label(scope)})",
+            interval_sec=10.0,
+        )
+        if should_fire:
+            logger.info(
+                f"[CMD] 触发命令: {command.get('name')} "
+                f"(请求增量={delta}, 阈值={threshold}, 标签页={session.id}, "
+                f"范围={self._format_scope_label(scope)})"
+            )
+            return True
+        return False
+
+    def _trigger_error_count(
+        self,
+        command: Dict,
+        session: Any,
+        trigger: Dict,
+        trigger_type: str,
+        scope: str,
+        scope_request_count: Optional[int],
+        state: Dict,
+    ) -> bool:
+        """判定 trigger_type == "error_count" 是否触发。
+
+        从 _should_trigger 的分派链中原样提出，方法体与提取前逐字节
+        相同（仅缩进变化）。入参是全量上下文，各分支按需使用。
+        """
+        threshold = max(1, self._coerce_int(trigger.get("value", 3), 3))
+        delta = session.error_count - state["err"]
+        if delta >= threshold:
+            logger.info(
+                f"[CMD] 触发命令: {command.get('name')} "
+                f"(错误增量={delta}, 阈值={threshold})"
+            )
+            with self._lock:
+                state["err"] = session.error_count
+            return True
+        return False
+
+    def _trigger_idle_timeout(
+        self,
+        command: Dict,
+        session: Any,
+        trigger: Dict,
+        trigger_type: str,
+        scope: str,
+        scope_request_count: Optional[int],
+        state: Dict,
+    ) -> bool:
+        """判定 trigger_type == "idle_timeout" 是否触发。
+
+        从 _should_trigger 的分派链中原样提出，方法体与提取前逐字节
+        相同（仅缩进变化）。入参是全量上下文，各分支按需使用。
+        """
+        threshold_sec = max(1.0, self._coerce_float(trigger.get("value", 300), 300.0))
+        idle = time.time() - session.last_used_at
+        if idle >= threshold_sec:
+            logger.info(
+                f"[CMD] 触发命令: {command.get('name')} "
+                f"(空闲时长={idle:.0f}秒, 阈值={threshold_sec}秒)"
+            )
+            return True
+        return False
+
+    def _trigger_page_check(
+        self,
+        command: Dict,
+        session: Any,
+        trigger: Dict,
+        trigger_type: str,
+        scope: str,
+        scope_request_count: Optional[int],
+        state: Dict,
+    ) -> bool:
+        """判定 trigger_type == "page_check" 是否触发。
+
+        从 _should_trigger 的分派链中原样提出，方法体与提取前逐字节
+        相同（仅缩进变化）。入参是全量上下文，各分支按需使用。
+        """
+        check_text = str(trigger.get("value", ""))
+        normalized_text = check_text.lower().strip()
+        op, keywords = self._parse_page_check_expression(check_text)
+        probe_js = str(trigger.get("probe_js", "") or "").strip()
+        match_info = (
+            self._evaluate_page_check_expr(session, op, keywords)
+            if keywords else {
+                "hit": True if probe_js else False,
+                "matched_keywords": [],
+                "snapshot_preview": "",
+            }
+        )
+        current_hit = bool(match_info.get("hit"))
+        probe_always = bool(trigger.get("probe_always", False))
+        if probe_js and (current_hit or probe_always):
+            probe_info = self._evaluate_page_check_probe(session, probe_js)
+            match_info["probe_hit"] = bool(probe_info.get("hit"))
+            match_info["probe_result"] = probe_info.get("result")
+            match_info["probe_summary"] = str(probe_info.get("summary") or "").strip()
+            current_hit = bool(probe_info.get("hit"))
+            match_info["hit"] = current_hit
+        fire_mode = str(trigger.get("fire_mode", "edge") or "edge").strip().lower()
+        cooldown_sec = max(0.0, self._coerce_float(trigger.get("cooldown_sec", 0), 0.0))
+        stable_for_sec = max(0.0, self._coerce_float(trigger.get("stable_for_sec", 0), 0.0))
+        now_ts = time.time()
+
+        once_per_request = bool(trigger.get("once_per_request", False))
+        current_request_id = ""
+        if once_per_request:
+            try:
+                for attr_name in ("_command_request_id", "_bound_request_id"):
+                    req_id = str(getattr(session, attr_name, "") or "").strip()
+                    if req_id:
+                        current_request_id = req_id
+                        break
+                if not current_request_id:
+                    task_id = str(getattr(session, "current_task_id", "") or "").strip()
+                    if task_id.startswith("req-"):
+                        current_request_id = task_id
+            except Exception:
+                pass
+
+        with self._lock:
+            if once_per_request and current_request_id:
+                triggered_reqs = state.setdefault("triggered_requests", set())
+                if current_request_id in triggered_reqs:
+                    return False
+
+            prev_key = str(state.get("page_key", ""))
+            prev_hit = bool(state.get("page_hit", False)) if prev_key == normalized_text else False
+            prev_stable = bool(state.get("page_stable", False)) if prev_key == normalized_text else False
+            hit_since = float(state.get("page_hit_since", 0.0) or 0.0) if prev_key == normalized_text else 0.0
+            if current_hit:
+                if not prev_hit or hit_since <= 0:
+                    hit_since = now_ts
+            else:
+                hit_since = 0.0
+            state["page_key"] = normalized_text
+            state["page_hit"] = current_hit
+            state["page_hit_since"] = hit_since
+            last_fire_at = float(state.get("page_last_fire_at", 0.0) or 0.0)
+            stable_hit = bool(current_hit and ((now_ts - hit_since) >= stable_for_sec))
+            state["page_stable"] = stable_hit
+
+            if fire_mode == "level":
+                if stable_hit and (cooldown_sec <= 0 or (now_ts - last_fire_at) >= cooldown_sec):
+                    if once_per_request and current_request_id:
+                        triggered_reqs = state.setdefault("triggered_requests", set())
+                        if current_request_id in triggered_reqs:
+                            return False
+                        triggered_reqs.add(current_request_id)
+                    state["page_last_fire_at"] = now_ts
+                    logger.info(
+                        f"[CMD] 触发命令: {command.get('name')} "
+                        f"(页面检查命中, 模式=持续触发, 文本='{check_text[:30]}', "
+                        f"冷却={cooldown_sec}秒)"
+                    )
+                    self._log_page_check_hit_details(command, session, match_info)
+                    return True
+            else:
+                if stable_hit and not prev_stable:
+                    if once_per_request and current_request_id:
+                        triggered_reqs = state.setdefault("triggered_requests", set())
+                        if current_request_id in triggered_reqs:
+                            return False
+                        triggered_reqs.add(current_request_id)
+                    state["page_last_fire_at"] = now_ts
+                    logger.info(
+                        f"[CMD] 触发命令: {command.get('name')} "
+                        f"(页面检查命中, 模式=边沿触发, 文本='{check_text[:30]}')"
+                    )
+                    self._log_page_check_hit_details(command, session, match_info)
+                    return True
+        return False
+
+    def _trigger_command_result_match(
+        self,
+        command: Dict,
+        session: Any,
+        trigger: Dict,
+        trigger_type: str,
+        scope: str,
+        scope_request_count: Optional[int],
+        state: Dict,
+    ) -> bool:
+        """判定 trigger_type == "command_result_match" 是否触发。
+
+        从 _should_trigger 的分派链中原样提出，方法体与提取前逐字节
+        相同（仅缩进变化）。入参是全量上下文，各分支按需使用。
+        """
+        dispatch = self._prepare_command_result_trigger_dispatch(command, session)
+        if dispatch:
+            self._set_pending_async_trigger_meta(command, session, dispatch)
+            logger.info(
+                f"[CMD] 触发命令: {command.get('name')} "
+                f"(命中命令结果匹配条件)"
+            )
+            return True
+        return False
+
+    def _trigger_command_check(
+        self,
+        command: Dict,
+        session: Any,
+        trigger: Dict,
+        trigger_type: str,
+        scope: str,
+        scope_request_count: Optional[int],
+        state: Dict,
+    ) -> bool:
+        """判定 trigger_type == "command_check" 是否触发。
+
+        从 _should_trigger 的分派链中原样提出，方法体与提取前逐字节
+        相同（仅缩进变化）。入参是全量上下文，各分支按需使用。
+        """
+        dispatch = self._prepare_command_check_dispatch(command, session)
+        if dispatch:
+            self._set_pending_async_trigger_meta(command, session, dispatch)
+            check_info = (dispatch.get("interrupt_context") or {}).get("command_check", {})
+            logger.info(
+                f"[CMD] 触发命令: {command.get('name')} "
+                f"(命令检查命中: 来源={check_info.get('source_command_name', '')}, "
+                f"结果={str(check_info.get('actual_result', '') or '')[:80]})"
+            )
+            return True
+        return False
+
+    def _trigger_command_result_event(
+        self,
+        command: Dict,
+        session: Any,
+        trigger: Dict,
+        trigger_type: str,
+        scope: str,
+        scope_request_count: Optional[int],
+        state: Dict,
+    ) -> bool:
+        """判定 trigger_type == "command_result_event" 是否触发。
+
+        从 _should_trigger 的分派链中原样提出，方法体与提取前逐字节
+        相同（仅缩进变化）。入参是全量上下文，各分支按需使用。
+        """
+        dispatch = self._prepare_command_result_event_dispatch(command, session)
+        if dispatch:
+            self._set_pending_async_trigger_meta(command, session, dispatch)
+            logger.info(
+                f"[CMD] 触发命令: {command.get('name')} "
+                f"(命中命令结果事件条件)"
+            )
+            return True
+        return False
+
+    def _trigger_network_request_error(
+        self,
+        command: Dict,
+        session: Any,
+        trigger: Dict,
+        trigger_type: str,
+        scope: str,
+        scope_request_count: Optional[int],
+        state: Dict,
+    ) -> bool:
+        """判定 trigger_type == "network_request_error" 是否触发。
+
+        从 _should_trigger 的分派链中原样提出，方法体与提取前逐字节
+        相同（仅缩进变化）。入参是全量上下文，各分支按需使用。
+        """
+        dispatch = self._prepare_network_trigger_dispatch(command, session)
+        if dispatch:
+            event = (dispatch.get("interrupt_context") or {}).get("network_event", {})
+            self._set_pending_async_trigger_meta(command, session, dispatch)
+            if (dispatch.get("rollback") or {}).get("token"):
+                logger.info(
+                    f"[CMD] 触发命令: {command.get('name')} "
+                    f"(网络异常状态码={event.get('status')}, 地址={event.get('url', '')[:80]})"
+                )
+                return True
+        return False
+
+
     def _should_trigger(self, command: Dict, session: 'TabSession') -> bool:
         trigger = command.get("trigger", {})
         trigger_type = trigger.get("type", "")
@@ -470,198 +796,20 @@ class CommandEngineTriggersMixin:
         if is_new and trigger_type not in {"page_check", "command_check"}:
             return False  # Newly initialized: wait for next check cycle
 
-        # Evaluate trigger condition by trigger type
-        if trigger_type == "request_count":
-            threshold = max(1, self._coerce_int(trigger.get("value", 10), 10))
-            current_count = (
-                int(scope_request_count)
-                if scope_request_count is not None
-                else self._get_scope_request_count(command, session)
-            )
-            with self._lock:
-                baseline = int(state.get("req", 0))
-                delta = current_count - baseline
-                should_fire = delta >= threshold
-                if should_fire:
-                    # 先记录旧基线；若后续因标签页忙碌/超时未实际执行，可回滚以便重试。
-                    state["req_prev"] = baseline
-                    state["req_pending"] = True
-                    state["req"] = current_count
-            logger.debug_throttled(
-                f"cmd.request_count.{command.get('id')}:{session.id}:{self._format_scope_label(scope)}",
-                f"[CMD] 请求计数检查: {command.get('name')} "
-                f"(当前={current_count}, 基线={baseline}, 增量={delta}, 阈值={threshold}, "
-                f"标签页={session.id}, 范围={self._format_scope_label(scope)})",
-                interval_sec=10.0,
-            )
-            if should_fire:
-                logger.info(
-                    f"[CMD] 触发命令: {command.get('name')} "
-                    f"(请求增量={delta}, 阈值={threshold}, 标签页={session.id}, "
-                    f"范围={self._format_scope_label(scope)})"
-                )
-                return True
-
-        elif trigger_type == "error_count":
-            threshold = max(1, self._coerce_int(trigger.get("value", 3), 3))
-            delta = session.error_count - state["err"]
-            if delta >= threshold:
-                logger.info(
-                    f"[CMD] 触发命令: {command.get('name')} "
-                    f"(错误增量={delta}, 阈值={threshold})"
-                )
-                with self._lock:
-                    state["err"] = session.error_count
-                return True
-
-        elif trigger_type == "idle_timeout":
-            threshold_sec = max(1.0, self._coerce_float(trigger.get("value", 300), 300.0))
-            idle = time.time() - session.last_used_at
-            if idle >= threshold_sec:
-                logger.info(
-                    f"[CMD] 触发命令: {command.get('name')} "
-                    f"(空闲时长={idle:.0f}秒, 阈值={threshold_sec}秒)"
-                )
-                return True
-
-        elif trigger_type == "page_check":
-            check_text = str(trigger.get("value", ""))
-            normalized_text = check_text.lower().strip()
-            op, keywords = self._parse_page_check_expression(check_text)
-            probe_js = str(trigger.get("probe_js", "") or "").strip()
-            match_info = (
-                self._evaluate_page_check_expr(session, op, keywords)
-                if keywords else {
-                    "hit": True if probe_js else False,
-                    "matched_keywords": [],
-                    "snapshot_preview": "",
-                }
-            )
-            current_hit = bool(match_info.get("hit"))
-            probe_always = bool(trigger.get("probe_always", False))
-            if probe_js and (current_hit or probe_always):
-                probe_info = self._evaluate_page_check_probe(session, probe_js)
-                match_info["probe_hit"] = bool(probe_info.get("hit"))
-                match_info["probe_result"] = probe_info.get("result")
-                match_info["probe_summary"] = str(probe_info.get("summary") or "").strip()
-                current_hit = bool(probe_info.get("hit"))
-                match_info["hit"] = current_hit
-            fire_mode = str(trigger.get("fire_mode", "edge") or "edge").strip().lower()
-            cooldown_sec = max(0.0, self._coerce_float(trigger.get("cooldown_sec", 0), 0.0))
-            stable_for_sec = max(0.0, self._coerce_float(trigger.get("stable_for_sec", 0), 0.0))
-            now_ts = time.time()
-
-            once_per_request = bool(trigger.get("once_per_request", False))
-            current_request_id = ""
-            if once_per_request:
-                try:
-                    for attr_name in ("_command_request_id", "_bound_request_id"):
-                        req_id = str(getattr(session, attr_name, "") or "").strip()
-                        if req_id:
-                            current_request_id = req_id
-                            break
-                    if not current_request_id:
-                        task_id = str(getattr(session, "current_task_id", "") or "").strip()
-                        if task_id.startswith("req-"):
-                            current_request_id = task_id
-                except Exception:
-                    pass
-
-            with self._lock:
-                if once_per_request and current_request_id:
-                    triggered_reqs = state.setdefault("triggered_requests", set())
-                    if current_request_id in triggered_reqs:
-                        return False
-
-                prev_key = str(state.get("page_key", ""))
-                prev_hit = bool(state.get("page_hit", False)) if prev_key == normalized_text else False
-                prev_stable = bool(state.get("page_stable", False)) if prev_key == normalized_text else False
-                hit_since = float(state.get("page_hit_since", 0.0) or 0.0) if prev_key == normalized_text else 0.0
-                if current_hit:
-                    if not prev_hit or hit_since <= 0:
-                        hit_since = now_ts
-                else:
-                    hit_since = 0.0
-                state["page_key"] = normalized_text
-                state["page_hit"] = current_hit
-                state["page_hit_since"] = hit_since
-                last_fire_at = float(state.get("page_last_fire_at", 0.0) or 0.0)
-                stable_hit = bool(current_hit and ((now_ts - hit_since) >= stable_for_sec))
-                state["page_stable"] = stable_hit
-
-                if fire_mode == "level":
-                    if stable_hit and (cooldown_sec <= 0 or (now_ts - last_fire_at) >= cooldown_sec):
-                        if once_per_request and current_request_id:
-                            triggered_reqs = state.setdefault("triggered_requests", set())
-                            if current_request_id in triggered_reqs:
-                                return False
-                            triggered_reqs.add(current_request_id)
-                        state["page_last_fire_at"] = now_ts
-                        logger.info(
-                            f"[CMD] 触发命令: {command.get('name')} "
-                            f"(页面检查命中, 模式=持续触发, 文本='{check_text[:30]}', "
-                            f"冷却={cooldown_sec}秒)"
-                        )
-                        self._log_page_check_hit_details(command, session, match_info)
-                        return True
-                else:
-                    if stable_hit and not prev_stable:
-                        if once_per_request and current_request_id:
-                            triggered_reqs = state.setdefault("triggered_requests", set())
-                            if current_request_id in triggered_reqs:
-                                return False
-                            triggered_reqs.add(current_request_id)
-                        state["page_last_fire_at"] = now_ts
-                        logger.info(
-                            f"[CMD] 触发命令: {command.get('name')} "
-                            f"(页面检查命中, 模式=边沿触发, 文本='{check_text[:30]}')"
-                        )
-                        self._log_page_check_hit_details(command, session, match_info)
-                        return True
-
-        elif trigger_type == "command_result_match":
-            dispatch = self._prepare_command_result_trigger_dispatch(command, session)
-            if dispatch:
-                self._set_pending_async_trigger_meta(command, session, dispatch)
-                logger.info(
-                    f"[CMD] 触发命令: {command.get('name')} "
-                    f"(命中命令结果匹配条件)"
-                )
-                return True
-
-        elif trigger_type == "command_check":
-            dispatch = self._prepare_command_check_dispatch(command, session)
-            if dispatch:
-                self._set_pending_async_trigger_meta(command, session, dispatch)
-                check_info = (dispatch.get("interrupt_context") or {}).get("command_check", {})
-                logger.info(
-                    f"[CMD] 触发命令: {command.get('name')} "
-                    f"(命令检查命中: 来源={check_info.get('source_command_name', '')}, "
-                    f"结果={str(check_info.get('actual_result', '') or '')[:80]})"
-                )
-                return True
-
-        elif trigger_type == "command_result_event":
-            dispatch = self._prepare_command_result_event_dispatch(command, session)
-            if dispatch:
-                self._set_pending_async_trigger_meta(command, session, dispatch)
-                logger.info(
-                    f"[CMD] 触发命令: {command.get('name')} "
-                    f"(命中命令结果事件条件)"
-                )
-                return True
-
-        elif trigger_type == "network_request_error":
-            dispatch = self._prepare_network_trigger_dispatch(command, session)
-            if dispatch:
-                event = (dispatch.get("interrupt_context") or {}).get("network_event", {})
-                self._set_pending_async_trigger_meta(command, session, dispatch)
-                if (dispatch.get("rollback") or {}).get("token"):
-                    logger.info(
-                        f"[CMD] 触发命令: {command.get('name')} "
-                        f"(网络异常状态码={event.get('status')}, 地址={event.get('url', '')[:80]})"
-                    )
-                    return True
+        # 按 trigger_type 分派到各自的判定方法；未知类型不触发。
+        handler_name = _TRIGGER_HANDLERS.get(trigger_type)
+        if handler_name is None:
+            return False
+        handler = getattr(self, handler_name)
+        return handler(
+            command=command,
+            session=session,
+            trigger=trigger,
+            trigger_type=trigger_type,
+            scope=scope,
+            scope_request_count=scope_request_count,
+            state=state,
+        )
 
         return False
     def _is_command_applicable_on_navigation(self, cmd: Dict[str, Any]) -> bool:

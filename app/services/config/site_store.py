@@ -262,7 +262,7 @@ class SiteStore:
             logger.error(f"旧版站点配置 {self.legacy_file} 无法解析，暂不迁移（原文件保持不变）: {exc}")
             return None
 
-        from updater import merge_site_records  # 与更新器合并 sites.json 的语义保持一致
+        from app.update.engine import merge_site_records  # 与更新器合并 sites.json 的语义保持一致
 
         self.sites_dir.mkdir(parents=True, exist_ok=True)
         existing: Dict[str, Tuple[Path, Dict[str, Any]]] = {}

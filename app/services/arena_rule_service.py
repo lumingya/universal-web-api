@@ -13,12 +13,12 @@ import json
 import logging
 import os
 import re
-import tempfile
 import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
+
 
 def _get_store() -> Any:
     from app.services import command_result_store
@@ -256,15 +256,15 @@ def record_arena_rule_candidates(
             text = str(response_text or "").strip()
             if not text:
                 continue
-            
+
             is_reasoning_side = False
             has_reasoning_sides = info.get("has_reasoning_sides") if isinstance(info, dict) else None
             if isinstance(has_reasoning_sides, list) and side_index < len(has_reasoning_sides):
                 is_reasoning_side = bool(has_reasoning_sides[side_index])
-                
+
             if rule.get("exclude_reasoning") and is_reasoning_side:
                 continue
-                
+
             matched, _ = matches_rule_fn(text, rule)
             if not matched:
                 continue

@@ -5,7 +5,7 @@ import re
 from app.core.config import get_logger
 
 try:
-    import requests  # noqa: F401
+    import requests
     HAS_REQUESTS = True
 except ImportError:  # pragma: no cover - requests 为必装依赖
     requests = None  # type: ignore[assignment]

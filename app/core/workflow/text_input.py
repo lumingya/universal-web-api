@@ -8,28 +8,28 @@ app/core/workflow/text_input.py - 文本输入处理
 """
 
 import base64
-import re
-import os
-import time
-import json
 import hashlib
-import threading
-import random
+import json
 import math
 import mimetypes
+import os
+import random
+import re
+import threading
+import time
+
 import pyperclip
-from app.core.config import logger, BrowserConstants, WorkflowError
+
+from app.core.config import BrowserConstants, WorkflowError, logger
+from app.core.driver import as_element, browser_driver, driver_for_tab
 from app.core.elements import ElementFinder
 from app.core.tab_pool import get_clipboard_lock
 from app.utils.file_paste import (
     DEFAULT_TEMP_FILE_TYPE,
     create_temp_file,
-    copy_file_to_clipboard,
     normalize_temp_file_type,
 )
-from app.utils.human_mouse import smooth_move_mouse
 from app.utils.platform import get_primary_modifier_key
-from app.core.driver import as_element, browser_driver, driver_for_tab
 
 # ================= 常量配置 =================
 
@@ -43,7 +43,7 @@ FILE_PASTE_TEMP_FILE_RETENTION_SECONDS = 15 * 60
 
 class TextInputHandler:
     """文本输入处理器"""
-    
+
     def __init__(self, tab, stealth_mode: bool, smart_delay_fn, check_cancelled_fn,
                  file_paste_config: dict = None,
                  selectors: dict = None,
@@ -161,16 +161,16 @@ class TextInputHandler:
         if bool((signal_state or {}).get("confirmed")):
             return True
         return self.has_strong_upload_signal((signal_state or {}).get("last_state"))
-    
+
     # ================= 工具方法 =================
-    
+
     def normalize_for_compare(self, text: str) -> str:
         """规范化文本用于比对（处理富文本编辑器的换行差异）"""
         text = text.replace('\r\n', '\n').replace('\r', '\n')
         text = re.sub(r'\n{3,}', '\n\n', text)
         text = text.strip()
         return text
-    
+
     def is_contenteditable(self, ele) -> bool:
         """检测元素是否为 contenteditable"""
         try:
@@ -186,7 +186,7 @@ class TextInputHandler:
         digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:12]
         prefix = f"{label} " if label else ""
         return f"<redacted {prefix}len={len(raw)} sha256={digest}>"
-    
+
     def debug_read_input_sample(self, ele, head: int = 80, tail: int = 80) -> dict:
         """读取输入框内容的头尾采样（用于调试）"""
         try:
@@ -225,7 +225,7 @@ class TextInputHandler:
             """)
         except Exception:
             return {"len": 0, "nl": 0, "head": "", "tail": ""}
-    
+
     def get_input_len(self, ele) -> int:
         """读取当前输入框内容长度"""
         try:
@@ -251,7 +251,7 @@ class TextInputHandler:
             return int(n) if n is not None else 0
         except Exception:
             return 0
-    
+
     def read_input_full_text(self, ele) -> str:
         """读取输入框完整内容"""
         try:
@@ -274,7 +274,7 @@ class TextInputHandler:
             return str(s).replace('\r\n', '\n').replace('\r', '\n')
         except Exception:
             return ""
-    
+
     def first_mismatch(self, a: str, b: str) -> int:
         """找到第一个不匹配的位置，完全相同返回 -1"""
         n = min(len(a), len(b))
@@ -282,7 +282,7 @@ class TextInputHandler:
             if a[i] != b[i]:
                 return i
         return n if len(a) != len(b) else -1
-    
+
     def get_input_stats(self, ele) -> tuple:
         """获取输入框统计信息：(长度, 换行数)"""
         try:
@@ -323,7 +323,7 @@ class TextInputHandler:
             return 0, 0
         except Exception:
             return 0, 0
-    
+
     def clear_input_safely(self, ele):
         """安全清空输入框"""
         try:
@@ -336,7 +336,7 @@ class TextInputHandler:
                 (function(){
                     try {
                         const tag = (this.tagName || '').toLowerCase();
-                        
+
                         if (tag === 'textarea' || tag === 'input') {
                             const proto = Object.getPrototypeOf(this);
                             const desc = Object.getOwnPropertyDescriptor(proto, 'value')
@@ -367,7 +367,7 @@ class TextInputHandler:
             """)
         except Exception:
             pass
-    
+
     def focus_to_end(self, ele):
         """把焦点放回输入框，并把光标移到末尾"""
         try:
@@ -402,7 +402,7 @@ class TextInputHandler:
             return True
         except Exception:
             return False
-    
+
     def _probe_focus_state(self, ele) -> dict:
         """检查当前焦点/选区是否仍落在目标输入元素内。"""
         try:
@@ -541,10 +541,10 @@ class TextInputHandler:
 
         actual = self.read_input_full_text(ele)
         actual_normalized = self.normalize_for_compare(actual)
-        
+
         expected_len = len(expected_text)
         actual_len = len(actual)
-        
+
         # 提取首尾字符样本，转义换行以保持日志在一行内
         head_sample = actual[:60].replace('\r', '\\r').replace('\n', '\\n')
         tail_sample = actual[-60:].replace('\r', '\\r').replace('\n', '\\n')
@@ -553,8 +553,8 @@ class TextInputHandler:
             logger.debug(
                 "[PASTE_VERIFY] 精确匹配成功: "
                 f"actual={actual_len}, expected={expected_len}, "
-                f"head={repr(self._redact_preview_text(head_sample, label='head'))}, "
-                f"tail={repr(self._redact_preview_text(tail_sample, label='tail'))}"
+                f"head={self._redact_preview_text(head_sample, label='head')!r}, "
+                f"tail={self._redact_preview_text(tail_sample, label='tail')!r}"
             )
             return True
 
@@ -564,8 +564,8 @@ class TextInputHandler:
             logger.debug(
                 "[PASTE_VERIFY] 核心无空白字符匹配成功: "
                 f"actual={actual_len}, expected={expected_len}, "
-                f"head={repr(self._redact_preview_text(head_sample, label='head'))}, "
-                f"tail={repr(self._redact_preview_text(tail_sample, label='tail'))}"
+                f"head={self._redact_preview_text(head_sample, label='head')!r}, "
+                f"tail={self._redact_preview_text(tail_sample, label='tail')!r}"
             )
             return True
 
@@ -573,8 +573,8 @@ class TextInputHandler:
             logger.debug(
                 "[PASTE_VERIFY] 核心文本包含关系匹配成功: "
                 f"actual={actual_len}, expected={expected_len}, "
-                f"head={repr(self._redact_preview_text(head_sample, label='head'))}, "
-                f"tail={repr(self._redact_preview_text(tail_sample, label='tail'))}"
+                f"head={self._redact_preview_text(head_sample, label='head')!r}, "
+                f"tail={self._redact_preview_text(tail_sample, label='tail')!r}"
             )
             return True
 
@@ -606,8 +606,8 @@ class TextInputHandler:
                 "[PASTE_VERIFY] 接受近似匹配结果: "
                 f"actual={actual_len} (core={actual_core_len}), expected={expected_len} (core={expected_core_len}), "
                 f"ratio={ratio:.2f}, gap={length_gap}, "
-                f"head={repr(self._redact_preview_text(head_sample, label='head'))}, "
-                f"tail={repr(self._redact_preview_text(tail_sample, label='tail'))}"
+                f"head={self._redact_preview_text(head_sample, label='head')!r}, "
+                f"tail={self._redact_preview_text(tail_sample, label='tail')!r}"
             )
             return True
 
@@ -616,8 +616,8 @@ class TextInputHandler:
                 "[PASTE_VERIFY] 检测到异常粘贴结果: "
                 f"actual={actual_len} (core={actual_core_len}), expected={expected_len} (core={expected_core_len}), "
                 f"ratio={ratio:.2f}, prefix_match={prefix_match}, suffix_match={suffix_match}, "
-                f"head={repr(self._redact_preview_text(head_sample, label='head'))}, "
-                f"tail={repr(self._redact_preview_text(tail_sample, label='tail'))}"
+                f"head={self._redact_preview_text(head_sample, label='head')!r}, "
+                f"tail={self._redact_preview_text(tail_sample, label='tail')!r}"
             )
             return False
 
@@ -625,8 +625,8 @@ class TextInputHandler:
             "[PASTE_VERIFY] 粘贴结果长度偏差过大: "
                 f"actual={actual_len} (core={actual_core_len}), expected={expected_len} (core={expected_core_len}), "
                 f"gap={length_gap}, "
-                f"head={repr(self._redact_preview_text(head_sample, label='head'))}, "
-                f"tail={repr(self._redact_preview_text(tail_sample, label='tail'))}"
+                f"head={self._redact_preview_text(head_sample, label='head')!r}, "
+                f"tail={self._redact_preview_text(tail_sample, label='tail')!r}"
         )
         return False
 
@@ -695,13 +695,13 @@ class TextInputHandler:
 
         logger.warning("[FILE_PASTE] 引导文本追加失败，发送内容可能缺少附带说明")
         return False
-    
+
     # ================= JS 模式输入 =================
-    
+
     def set_input_atomic(self, ele, text: str, mode: str = "append") -> bool:
         """原子输入操作（仅普通模式使用）"""
         normalized_text = text.replace('\r\n', '\n')
-    
+
         try:
             b64_text = base64.b64encode(normalized_text.encode('utf-8')).decode('utf-8')
         except Exception as e:
@@ -842,13 +842,13 @@ class TextInputHandler:
             return false;
           }}
         }}).call(this);
-        """    
+        """
         try:
             return bool(as_element(ele).run_js(js_code))
         except Exception as e:
             logger.error(f"原子输入执行错误: {e}")
             return False
-    
+
     def append_chunk_via_js(self, ele, chunk: str) -> bool:
         """(备用) 简单追加模式"""
         try:
@@ -876,7 +876,7 @@ class TextInputHandler:
             return bool(ok)
         except Exception:
             return False
-    
+
     def chunked_input(self, ele, text: str, chunk_size: int = None) -> bool:
         """分块写入逻辑（普通模式用）"""
         chunk_size = (
@@ -886,7 +886,7 @@ class TextInputHandler:
         )
         total_len = len(text)
         total_chunks = max(1, (total_len + max(1, chunk_size) - 1) // max(1, chunk_size))
-        
+
         # 情况1：短文本直接一次写入
         if total_len <= chunk_size:
             logger.debug(f"[CHUNKED_INPUT] 短文本模式: {total_len} 字符，直接写入")
@@ -897,7 +897,7 @@ class TextInputHandler:
             f"[CHUNKED_INPUT] 长文本模式: {total_len} 字符，分块大小 {chunk_size}，"
             f"预计 {total_chunks} 块"
         )
-        
+
         # 首块：覆盖写入
         first_chunk = text[:chunk_size]
         if not self.set_input_atomic(ele, first_chunk, mode="overwrite"):
@@ -906,18 +906,18 @@ class TextInputHandler:
             if not self.fill_via_js_backup(ele, first_chunk):
                 logger.error("[CHUNKED_INPUT] 首块写入彻底失败")
                 return False
-        
+
         logger.debug(
             f"[CHUNKED_INPUT] 首块完成: 1/{total_chunks} "
             f"(chars=0-{len(first_chunk)})"
         )
         time.sleep(0.1)
-        
+
         # 后续块：追加写入
         current_pos = chunk_size
         chunk_index = 1
         next_progress_pct = 25
-        
+
         while current_pos < total_len:
             if self._check_cancelled():
                 logger.info("[CHUNKED_INPUT] 被取消")
@@ -925,13 +925,13 @@ class TextInputHandler:
 
             end_pos = min(current_pos + chunk_size, total_len)
             chunk = text[current_pos:end_pos]
-            
+
             if not self.set_input_atomic(ele, chunk, mode="append"):
                 logger.warning(f"[CHUNKED_INPUT] 第 {chunk_index} 块追加失败: {current_pos}-{end_pos}")
                 if not self.append_chunk_via_js(ele, chunk):
                     logger.error(f"[CHUNKED_INPUT] 备用方案也失败")
                     return False
-            
+
             completed_chunks = chunk_index + 1
             progress_pct = int(end_pos * 100 / max(1, total_len))
             if (
@@ -948,17 +948,17 @@ class TextInputHandler:
             current_pos = end_pos
             chunk_index += 1
             time.sleep(0.08)
-        
+
         logger.info(f"[CHUNKED_INPUT] 全部完成: {chunk_index} 块，共 {total_len} 字符")
         return True
-    
+
     def physical_activate(self, ele):
         """物理激活输入框（绕过 isTrusted 检测）"""
         try:
             as_element(ele).run_js("this.focus && this.focus()")
-            
+
             is_ce = self.is_contenteditable(ele)
-            
+
             if is_ce:
                 driver_for_tab(self.tab).actions.key_down(' ').key_up(' ')
                 time.sleep(0.03)
@@ -967,18 +967,18 @@ class TextInputHandler:
                 ele.input(' ')
                 time.sleep(0.03)
                 driver_for_tab(self.tab).actions.key_down('Backspace').key_up('Backspace')
-            
+
             time.sleep(0.1)
         except Exception as e:
             logger.debug(f"物理激活异常（可忽略）: {e}")
-    
+
     def verify_and_fix(self, ele, original_text: str):
         """校验并修正输入内容（普通模式用）"""
         expected = original_text.replace('\r\n', '\n').replace('\r', '\n')
         expected_len = len(expected)
         expected_normalized = self.normalize_for_compare(expected)
         expected_core = re.sub(r'\s+', '', expected)
-        
+
         is_rich_editor = self.is_contenteditable(ele)
 
         for attempt in range(3):
@@ -1010,7 +1010,7 @@ class TextInputHandler:
             # 校验失败，记录详细信息
             actual_len = len(actual)
             mismatch_pos = self.first_mismatch(actual_normalized, expected_normalized)
-            
+
             window = 60
             if mismatch_pos >= 0:
                 start = max(0, mismatch_pos - window)
@@ -1020,34 +1020,34 @@ class TextInputHandler:
             else:
                 actual_snippet = actual_normalized[-window:] if actual_normalized else "(empty)"
                 expected_snippet = expected_normalized[-window:] if expected_normalized else "(empty)"
-            
+
             logger.debug(
                 f"[VERIFY_FAIL] attempt={attempt} "
                 f"actual_len={actual_len} expected_len={expected_len} "
                 f"mismatch_at={mismatch_pos} is_rich={is_rich_editor}\n"
-                f"  ACTUAL(norm):   ...{repr(actual_snippet)}...\n"
-                f"  EXPECTED(norm): ...{repr(expected_snippet)}..."
+                f"  ACTUAL(norm):   ...{actual_snippet!r}...\n"
+                f"  EXPECTED(norm): ...{expected_snippet!r}..."
             )
 
             # 尝试修复
             self.clear_input_safely(ele)
             time.sleep(0.05)
-            
+
             ok = self.set_input_atomic(ele, expected, mode="overwrite")
             if not ok:
                 logger.debug(f"[VERIFY] attempt={attempt} 原子写入返回 False，尝试备用方案")
                 self.fill_via_js_backup(ele, expected)
-            
+
             time.sleep(0.15)
 
         # 最终检查
         final_actual = self.read_input_full_text(ele)
         final_normalized = self.normalize_for_compare(final_actual)
-        
+
         if final_normalized == expected_normalized:
             logger.info("[VERIFY_OK] 最终检查通过 (normalized)")
             return
-        
+
         if is_rich_editor:
             final_core = re.sub(r'\s+', '', final_actual)
             if final_core == expected_core:
@@ -1060,7 +1060,7 @@ class TextInputHandler:
             f"(actual={final_len}, expected={expected_len}, is_rich={is_rich_editor})"
         )
         raise WorkflowError("input_mismatch")
-    
+
     def fill_via_js_backup(self, ele, text: str) -> bool:
         """使用 JavaScript 直接设置值（备用方案）"""
         try:
@@ -1101,7 +1101,7 @@ class TextInputHandler:
         except Exception as e:
             logger.error(f"JS 备用方案失败: {e}")
             return False
-    
+
     def fill_via_js(self, ele, text: str):
         """普通模式专用：JS 填充逻辑"""
         # 🆕 文件粘贴前置判断
@@ -1109,9 +1109,9 @@ class TextInputHandler:
             if self._fill_via_file_paste(ele, text):
                 return
             raise WorkflowError("attachment_prepare_failed")
-        
+
         self.clear_input_safely(ele)
-        
+
         # 分块写入
         chunk_size = self.get_text_input_chunk_size()
         success = self.chunked_input(ele, text, chunk_size=chunk_size)
@@ -1147,13 +1147,13 @@ class TextInputHandler:
 
         # 校验并修正
         self.verify_and_fix(ele, text)
-        
+
         # 调试日志
         sample = self.debug_read_input_sample(ele)
         logger.debug(
             f"[INPUT_SNAPSHOT] len={sample['len']} nl={sample['nl']} "
-            f"head={repr(self._redact_preview_text(sample['head'], label='head'))}... "
-            f"tail=...{repr(self._redact_preview_text(sample['tail'], label='tail'))}"
+            f"head={self._redact_preview_text(sample['head'], label='head')!r}... "
+            f"tail=...{self._redact_preview_text(sample['tail'], label='tail')!r}"
         )
         # ================= 人类化按键辅助（隐身模式专用）=================
 
@@ -1182,7 +1182,7 @@ class TextInputHandler:
     def _human_key_combo(self, *keys):
         """
         人类化组合键：保留轻微随机感，但不刻意拖慢节奏
-        
+
         用法：
             self._human_key_combo('Control', 'A')   → Ctrl+A
             self._human_key_combo('Meta', 'V')      → Cmd+V
@@ -1198,10 +1198,10 @@ class TextInputHandler:
             self._sleep_human_key_delay(down_up_min, down_up_max)
             driver_for_tab(self.tab).actions.key_up(keys[0])
             return
-        
+
         modifier = keys[0]
         targets = keys[1:]
-        
+
         driver_for_tab(self.tab).actions.key_down(modifier)
         self._sleep_human_key_delay(between_min, between_max)
 
@@ -1220,14 +1220,14 @@ class TextInputHandler:
                 self._sleep_human_key_delay(0.01, 0.04)
                 driver_for_tab(self.tab).actions.key_up(modifier)
             return
-        
+
         for i, target in enumerate(targets):
             driver_for_tab(self.tab).actions.key_down(target)
             self._sleep_human_key_delay(down_up_min, down_up_max)
             driver_for_tab(self.tab).actions.key_up(target)
             if i < len(targets) - 1:
                 self._sleep_human_key_delay(between_min, between_max)
-        
+
         self._sleep_human_key_delay(down_up_min, down_up_max)
         driver_for_tab(self.tab).actions.key_up(modifier)
 
@@ -1274,27 +1274,27 @@ class TextInputHandler:
     def _stealth_verify_paste_light(self, ele, expected_text: str):
         """
         轻量级粘贴验证（隐身模式专用）
-        
+
         仅通过 DrissionPage 原生属性读取，不注入 JS。
         只做长度级别粗略检查，失败只记 warning 不重试。
         """
         try:
             actual_text = ""
             tag = ele.tag.lower() if hasattr(ele, 'tag') and ele.tag else ""
-            
+
             if tag in ('textarea', 'input'):
                 actual_text = ele.attr('value') or ""
             else:
                 actual_text = ele.text or ""
-            
+
             actual_len = len(actual_text)
             expected_len = len(expected_text)
-            
+
             if expected_len == 0:
                 return
-            
+
             ratio = actual_len / expected_len if expected_len > 0 else 0
-            
+
             if ratio < 0.5:
                 logger.warning(
                     f"[STEALTH_VERIFY] 粘贴可能不完整: "
@@ -1916,7 +1916,7 @@ class TextInputHandler:
     def fill_via_clipboard_no_click(self, ele, text: str):
         """
         隐身模式专用：跳过 ele.click() 的剪贴板粘贴
-        
+
         假设调用方已经通过人类化点击聚焦了输入框。
         """
         # 🆕 文件粘贴前置判断
@@ -1924,11 +1924,11 @@ class TextInputHandler:
             if self._fill_via_file_paste(ele, text):
                 return
             raise WorkflowError("attachment_prepare_failed")
-        
+
         settle_min = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MIN') or 0.12)
         settle_max = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MAX') or 0.25)
         skip_verify = bool(BrowserConstants.get('STEALTH_SKIP_PASTE_VERIFY'))
-        
+
         try:
             if self._check_cancelled():
                 return
@@ -1936,28 +1936,28 @@ class TextInputHandler:
             if not self._ensure_input_focus_native(ele):
                 logger.warning("[STEALTH] 输入框原生聚焦失败，停止本次低熵输入")
                 raise WorkflowError("clipboard_focus_failed")
-            
+
             # 仅在已有内容时执行全选，避免“空输入框也 Ctrl+A”的机器特征
             current_len = self.get_input_len(ele)
             if current_len > 0:
                 self._press_primary_combo('A', humanized=True)
                 self._smart_delay(0.08, 0.18)
-            
+
             if self._check_cancelled():
                 return
-            
+
             self._paste_text_via_clipboard(
                 text,
                 humanized=True,
                 settle_delay_range=(settle_min, settle_max),
             )
-            
+
             # 额外等待框架响应
             self._smart_delay(0.06, 0.14)
-            
+
             if self._check_cancelled():
                 return
-            
+
             if not self.verify_paste_result_minimal(ele, text):
                 raise WorkflowError("clipboard_paste_failed")
 
@@ -1976,11 +1976,11 @@ class TextInputHandler:
             logger.error(f"[STEALTH] 剪贴板粘贴失败: {e}，停止本次低熵输入")
             raise WorkflowError("clipboard_paste_failed") from e
     # ================= 剪贴板模式输入 =================
-    
+
     def fill_via_clipboard(self, ele, text: str):
         """
         隐身模式专用：剪贴板 + 主修饰键粘贴输入（v5.6 反检测增强版）
-        
+
         改进：
         - 人类化按键时序（_human_key_combo）
         - 主修饰键+A → 主修饰键+V（跳过 Delete，人类习惯：选中直接粘贴覆盖）
@@ -1993,11 +1993,11 @@ class TextInputHandler:
             if self._fill_via_file_paste(ele, text):
                 return
             raise WorkflowError("attachment_prepare_failed")
-        
+
         settle_min = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MIN') or 0.12)
         settle_max = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MAX') or 0.25)
         skip_verify = bool(BrowserConstants.get('STEALTH_SKIP_PASTE_VERIFY'))
-    
+
         try:
             # 1. 聚焦输入框（原生点击）
             ele.click()
@@ -2006,31 +2006,31 @@ class TextInputHandler:
             if not self._ensure_input_focus_native(ele):
                 logger.warning("[STEALTH] 输入框原生聚焦失败，停止本次低熵输入")
                 raise WorkflowError("clipboard_focus_failed")
-        
+
             if self._check_cancelled():
                 return
-        
+
             # 2. 仅在已有内容时全选；空框时直接粘贴更像真实操作
             current_len = self.get_input_len(ele)
             if current_len > 0:
                 self._press_primary_combo('A', humanized=True)
                 self._smart_delay(0.03, 0.08)
-        
+
             if self._check_cancelled():
                 return
-        
+
             self._paste_text_via_clipboard(
                 text,
                 humanized=True,
                 settle_delay_range=(settle_min, settle_max),
             )
-        
+
             # 4. 额外等待框架响应
             self._smart_delay(0.06, 0.14)
-        
+
             if self._check_cancelled():
                 return
-        
+
             if not self.verify_paste_result_minimal(ele, text):
                 raise WorkflowError("clipboard_paste_failed")
 
@@ -2049,38 +2049,37 @@ class TextInputHandler:
         except Exception as e:
             logger.error(f"[STEALTH] 剪贴板粘贴失败: {e}，停止本次低熵输入")
             raise WorkflowError("clipboard_paste_failed") from e
-    
+
     def verify_clipboard_result(self, ele, expected_text: str):
         """验证剪贴板粘贴结果"""
         expected_normalized = self.normalize_for_compare(expected_text)
         expected_core = re.sub(r'\s+', '', expected_text)
         is_rich_editor = self.is_contenteditable(ele)
-        
+
         # 第一次检查
         actual = self.read_input_full_text(ele)
         actual_normalized = self.normalize_for_compare(actual)
-        
+
         # 精确匹配
         if actual_normalized == expected_normalized:
             logger.info(f"[CLIPBOARD_OK] 粘贴成功，长度 {len(actual)}")
             return
-        
+
         # 富文本编辑器宽松匹配
         if is_rich_editor:
             actual_core = re.sub(r'\s+', '', actual)
             if actual_core == expected_core:
-                diff = len(actual) - len(expected_text)                
                 return
-        
+
         # 失败：尝试重试
         logger.warning(
             f"[CLIPBOARD_RETRY] 粘贴不完整 "
             f"(actual={len(actual)}, expected={len(expected_text)})"
         )
-        
+
         try:
 
-        
+
             # 清空
             ele.click()
             time.sleep(0.05)
@@ -2088,34 +2087,34 @@ class TextInputHandler:
             time.sleep(0.05)
             driver_for_tab(self.tab).actions.key_down('Delete').key_up('Delete')
             time.sleep(0.1)
-        
+
             self._paste_text_via_clipboard(
                 expected_text,
                 copy_delay_range=(0.05, 0.05),
                 settle_delay_range=(0.5, 0.5),
             )
-        
+
             # 最终验证
             actual = self.read_input_full_text(ele)
             actual_normalized = self.normalize_for_compare(actual)
-        
+
             if actual_normalized == expected_normalized:
                 logger.info("[CLIPBOARD_OK] 重试成功")
                 return
-        
+
             if is_rich_editor:
                 actual_core = re.sub(r'\s+', '', actual)
                 if actual_core == expected_core:
                     logger.info("[CLIPBOARD_OK] 重试成功（富文本匹配）")
                     return
-        
+
             # 彻底失败
             logger.error(
                 f"[CLIPBOARD_FAIL] 重试后仍失败 "
                 f"(actual={len(actual)}, expected={len(expected_text)})"
             )
             raise WorkflowError("clipboard_paste_failed")
-    
+
         except Exception as e:
             logger.error(f"[CLIPBOARD_FAIL] 重试异常: {e}")
             raise WorkflowError("clipboard_paste_failed")

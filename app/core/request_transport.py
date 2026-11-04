@@ -19,7 +19,6 @@ from app.core.page_capture import (
     get_page_request_transport_profiles,
 )
 
-
 REQUEST_TRANSPORT_MODE_WORKFLOW = "workflow"
 REQUEST_TRANSPORT_MODE_PAGE_FETCH = "page_fetch"
 

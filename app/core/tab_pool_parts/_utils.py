@@ -2,7 +2,6 @@ from typing import Any
 
 from app.utils.site_url import is_remote_site_url
 
-
 _POOL_SKIP_URL_PREFIXES = (
     "about:",
     "chrome://",

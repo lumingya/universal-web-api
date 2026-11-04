@@ -4,13 +4,12 @@ site_url.py - URL helpers for identifying real remote sites and route domains.
 
 from __future__ import annotations
 
-import ipaddress
 import hashlib
-from typing import Optional, List
+import ipaddress
+from typing import List, Optional
 from urllib.parse import urlparse, urlunparse
 
 from app.utils.site_rules import build_route_alias_groups, load_site_rules
-
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 _LOCAL_SUFFIXES = (

@@ -32,6 +32,10 @@ def test_no_test_file_is_gitignored():
         for pattern in ("test_*.py", "_*.py", "e2e_*.py", "browser_*.py", "conftest.py")
         for path in TESTS.glob(pattern)
     )
+    # tests/manual/ 的手动脚本同样入库，不能被 .gitignore 吞掉
+    candidates += sorted(
+        path.relative_to(ROOT).as_posix() for path in (TESTS / "manual").glob("*.py")
+    )
     assert candidates, "tests/ 下没有找到测试文件"
     out = _git("check-ignore", "--no-index", *candidates)
     ignored = [line for line in out.stdout.splitlines() if line.strip()]

@@ -1,7 +1,6 @@
-import contextlib
 import asyncio
+import contextlib
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -27,7 +26,6 @@ from app.services.arena_direct_models import (
     resolve_arena_direct_model,
 )
 from app.utils.model_routing import inspect_model_route
-
 
 MODEL_UUID = "019c6d29-a30c-7e20-9bd0-6650af926623"
 MODEL_TRIGGER_SELECTOR = (
@@ -1547,8 +1545,9 @@ def test_arena_image_direct_models_auto_refresh_and_merge():
     assert any(m["name"] == "flux-2-pro" for m in image_models)
 
 def test_arena_model_catalog_save_failure_and_migration_safety(monkeypatch):
-    from app.services import arena_model_catalog
     import pytest
+
+    from app.services import arena_model_catalog
 
     # 1. set_arena_model_catalog 在写入失败时必须抛出异常
     monkeypatch.setattr(
@@ -1676,8 +1675,9 @@ def test_dark_pool_different_configs_not_incorrectly_deduped(monkeypatch):
 
 
 def test_match_arena_catalog_tab_per_tab_isolation(monkeypatch):
-    import app.api.chat as chat_api
     from types import SimpleNamespace
+
+    import app.api.chat as chat_api
 
     class _TabA:
         def run_js(self, _script, timeout=None):

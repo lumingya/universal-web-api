@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # B6 · 非有限数值配置不再 OverflowError
 # ---------------------------------------------------------------------------
@@ -108,8 +107,9 @@ def test_b4_chat_request_rejects_n_greater_than_one():
 def test_b4_api_returns_openai_style_422(monkeypatch):
     import asyncio
 
-    import main
     from httpx import ASGITransport, AsyncClient
+
+    import main
 
     for name in ("AUTH_ENABLED", "AUTH_TOKEN"):
         monkeypatch.delenv(name, raising=False)
@@ -132,10 +132,11 @@ def test_b4_api_returns_openai_style_422(monkeypatch):
 def test_h7_annotations_resolvable():
     import typing
 
-    import start
+    import main
+    from app.runtime import bootstrap, browser_launcher, relaunch
     from app.utils import model_routing
 
-    for mod in (start, model_routing):
+    for mod in (main, browser_launcher, bootstrap, relaunch, model_routing):
         for obj in vars(mod).values():
             if callable(obj) and getattr(obj, "__module__", None) == mod.__name__ and not isinstance(obj, type):
                 typing.get_type_hints(obj)  # 旧代码对缺失导入会抛 NameError
@@ -202,14 +203,15 @@ def test_h13_dead_storage_mixin_removed():
 
 
 # ---------------------------------------------------------------------------
-# T2 · 测试用到的 httpx 必须写进 requirements-dev.txt
+# T2 · 测试用到的 httpx 必须写进 pyproject.toml 的 dev 依赖组
 # ---------------------------------------------------------------------------
 
-def test_t2_httpx_declared_in_dev_requirements():
+def test_t2_httpx_declared_in_dev_group():
     import re
 
-    text = (Path(__file__).resolve().parents[1] / "requirements-dev.txt").read_text(encoding="utf-8")
-    assert re.search(r"(?m)^httpx\b", text)
+    text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    dev_group = text.split("[dependency-groups]", 1)[1]
+    assert re.search(r'(?m)^\s*"httpx', dev_group)
 
 
 # ---------------------------------------------------------------------------
@@ -245,16 +247,17 @@ class _FakeBrowser:
 def _s7_get(monkeypatch, path, client_host, headers=None, env=None, browser=None):
     import asyncio
 
-    import main
-    from app.api import system
     from httpx import ASGITransport, AsyncClient
+
+    import main
+    from app.api.system import runtime as system_runtime
 
     for name in ("AUTH_TOKEN", "DASHBOARD_AUTH_TOKEN", "AUTH_ENABLED", "TRUST_PROXY_HEADERS"):
         monkeypatch.delenv(name, raising=False)
     for key, value in (env or {}).items():
         monkeypatch.setenv(key, value)
     fake = browser or _FakeBrowser()
-    monkeypatch.setattr(system, "get_browser", lambda *a, **k: fake)
+    monkeypatch.setattr(system_runtime, "get_browser", lambda *a, **k: fake)
 
     async def run():
         transport = ASGITransport(app=main.app, client=(client_host, 40000))

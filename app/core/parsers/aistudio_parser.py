@@ -15,13 +15,14 @@ import re
 from typing import Any, Dict, List, Tuple
 
 from app.core.config import logger
+
 from .base import ResponseParser
 
 
 class AIStudioParser(ResponseParser):
     """
     Google AI Studio (MakerSuite) 响应解析器
-    
+
     URL 特征: MakerSuiteService/GenerateContent
     响应格式: JSON+Protobuf (嵌套数组)
     """
@@ -32,7 +33,7 @@ class AIStudioParser(ResponseParser):
     _VISIBLE_TEXT_BLOCK_PREFIX = 'null,"'
     _OBFUSCATED_PAYLOAD_RE = re.compile(r"^[A-Za-z0-9+/=_-]+$")
     _CJK_RE = re.compile(r"[\u3400-\u9fff]")
-    
+
     def __init__(self):
         self._accumulated_content = ""
         self._accumulated_reasoning = ""
@@ -41,7 +42,7 @@ class AIStudioParser(ResponseParser):
         self._pending_raw = ""
         self._visible_text_scan_pending = ""
         self._visible_text_fallback_content = ""
-    
+
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         """
         解析响应（返回完整内容的增量）
@@ -416,31 +417,31 @@ class AIStudioParser(ResponseParser):
             # 路径: block[0][0][0][0][0]
             # thinking: [13 items, None, "**Thinking...", ..., 1]
             # 正常内容: [2 items, None, "文本内容"]
-            
+
             if not isinstance(block, list) or len(block) == 0:
                 return "", False, False
-            
+
             level1 = block[0]
             if not isinstance(level1, list) or len(level1) == 0:
                 return "", False, False
-            
+
             level2 = level1[0]
             if not isinstance(level2, list) or len(level2) == 0:
                 return "", False, False
-            
+
             level3 = level2[0]
             if not isinstance(level3, list) or len(level3) == 0:
                 return "", False, False
-            
+
             level4 = level3[0]
             if not isinstance(level4, list) or len(level4) == 0:
                 return "", False, False
-            
+
             # 这里就是 content_arr
             content_arr = level4[0]
             if not isinstance(content_arr, list):
                 return "", False, False
-            
+
             # 提取文本：只接受像“可见正文”的字符串，避免把内部高熵 payload 误当回复。
             text = ""
             primary_text = content_arr[1] if len(content_arr) > 1 else ""
@@ -464,25 +465,25 @@ class AIStudioParser(ResponseParser):
                             f"(len={len(str(suppressed_payload).strip())})",
                             interval_sec=3.0,
                         )
-            
+
             # 判断是否是 thinking
             # thinking 块特征：len >= 13 且索引 12 == 1
             is_thinking = False
             if len(content_arr) >= 13:
                 if len(content_arr) > 12 and content_arr[12] == 1:
                     is_thinking = True
-            
+
             # 检查是否结束
             # 1. level2 的第二个元素是 1
             is_done = False
             if len(level2) > 1 and level2[1] == 1:
                 is_done = True
-            
+
             # 2. 有长 token 字符串（索引 13 或 14）
             if len(content_arr) > 13 and isinstance(content_arr[13], str):
                 if len(content_arr[13]) > 50:
                     is_done = True
-            
+
             return text, is_done, is_thinking
 
         except Exception as e:

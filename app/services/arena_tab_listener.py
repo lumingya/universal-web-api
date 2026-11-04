@@ -11,9 +11,9 @@ import time
 from typing import Any, Callable, Dict, Optional, Set
 
 from app.core.config import logger
+from app.core.driver import driver_for_tab
 from app.core.page_lifecycle import is_page_refresh_error
 from app.core.tab_pool_parts.session import TabSession
-from app.core.driver import driver_for_tab
 
 
 def is_explicit_arena_direct_url(url: Any) -> bool:
@@ -39,11 +39,12 @@ def is_explicit_arena_direct_url(url: Any) -> bool:
         return False
 
 
+from app.core.cdp_hygiene import decode_js_json
 from app.core.tab_pool_parts._arena_snapshot import (
-    _ARENA_STORE_SNAPSHOT_JS,
+    # 再导出：tests/test_arena_auto_battle_command.py 从本模块取用。
+    _ARENA_STORE_SNAPSHOT_JS,  # noqa: F401
     _ARENA_STORE_SNAPSHOT_JSON_JS,
 )
-from app.core.cdp_hygiene import decode_js_json
 from app.core.tab_pool_parts.idle_maintenance import note_network_activity
 
 

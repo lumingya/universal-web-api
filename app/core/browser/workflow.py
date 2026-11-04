@@ -1,50 +1,50 @@
 # app/core/browser/workflow.py
 
-import json
-import time
 import contextlib
-import random
+import json
 import re
-from typing import Optional, List, Dict, Any, Generator, Callable, Mapping, TYPE_CHECKING
+import time
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+)
 
 from app.core.config import (
-    logger,
     BrowserConstants,
     ElementNotFoundError,
-    WorkflowError,
     MessageValidator,
+    WorkflowError,
+    logger,
 )
-from app.utils.site_url import extract_remote_site_domain, tab_url_matches
-from app.utils.attachments import attachment_scope, AttachmentError, has_attachments
+from app.core.driver import driver_for_tab
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
+from app.core.tab_pool import TabSession
 from app.core.workflow import WorkflowExecutor
-from app.core.workflow.flow_runtime import FlowProgram, has_control_flow, validate_workflow, capture_page_state
-from app.core.workflow.error_handlers import (
-    get_workflow_retry_handler,
-    is_retriable_workflow_error,
-)
-from app.core.workflow.arena_send_watchdog import (
-    ARENA_SEND_NO_TARGET_AFTER_RETRY,
-    ArenaSendRetryRefreshError,
-    ArenaSendWatchdogCancelled,
-    refresh_arena_page_for_retry,
-)
 from app.core.workflow.arena_direct_guard import (
-    ARENA_DIRECT_UNEXPECTED_BATTLE_REDIRECT,
-    ArenaDirectRecoveryError,
-    ArenaUnexpectedBattleRedirectError,
     is_arena_direct_preset,
     is_arena_unexpected_battle_url,
-    recover_arena_direct_page,
     resolve_arena_direct_entry_url,
     resolve_arena_direct_recovery_url,
     workflow_has_new_chat_step,
 )
+from app.core.workflow.arena_send_watchdog import (
+    ARENA_SEND_NO_TARGET_AFTER_RETRY,
+)
+from app.core.workflow.error_handlers import (
+    get_workflow_retry_handler,
+    is_retriable_workflow_error,
+)
+from app.core.workflow.flow_runtime import FlowProgram, capture_page_state, has_control_flow, validate_workflow
 from app.core.workflow.input_chunking import PromptChunk, plan_prompt_chunks
-from app.core.tab_pool import TabSession
 from app.models.schemas import get_modality_run_policy, is_modality_enabled
 from app.services.arena_direct_models import (
-    get_model_catalog_preset,
     resolve_arena_direct_model,
 )
 from app.services.arena_image_generation import (
@@ -54,11 +54,54 @@ from app.services.arena_image_generation import (
     is_arena_image_generation_request,
     validate_generated_images,
 )
+from app.utils.attachments import AttachmentError, attachment_scope, has_attachments
 from app.utils.image_validation import filter_reference_images
-from app.core.driver import driver_for_tab
+from app.utils.site_url import extract_remote_site_domain, tab_url_matches
 
 if TYPE_CHECKING:
-    from .main import BrowserCore
+    pass
+
+
+# ---------------------------------------------------------------------------
+# 工作流入口守卫
+#
+# _execute_workflow_stream_once 原先把这 6 条"致命前置错误"判定内联在函数
+# 开头（55 行、8 个分支）。它们与主循环毫无数据耦合，只是各自 yield 一个
+# 错误块后 return，因此提取为 _resolve_workflow_entry + 下面的码表。
+# 判定顺序即 _resolve_workflow_entry 里的书写顺序，由
+# tests/test_workflow_entry_guards.py 锁定。
+# ---------------------------------------------------------------------------
+
+_WORKFLOW_INVALID_ENTRY_URLS = ("about:blank", "chrome://newtab/", "chrome://new-tab-page/")
+
+_WORKFLOW_ENTRY_ERROR_MESSAGES: Dict[str, str] = {
+    "cancelled": "请求已取消",
+    "tab_closed": "标签页已关闭或失效，请刷新页面后重试",
+    "no_page": "请先打开目标AI网站",
+    "blank_page": "当前是空白页，请先打开目标AI网站",
+    "page_error": "页面加载错误，请刷新后重试",
+    "invalid_url": "当前页面不是可解析的网站，请打开真实的远程站点页面后再试",
+}
+
+
+class _WorkflowEntry(NamedTuple):
+    """工作流入口解析结果。error_code 为 None 表示可以继续。
+
+    只回传 domain：url 仅被守卫块自身使用，主流程改从 tab 现取
+    （原代码在守卫之后也是用 getattr(tab, "url", "") 重新读取的）。
+    """
+
+    error_code: Optional[str]
+    domain: str
+
+
+class _InterruptOutcome(NamedTuple):
+    """_handle_workflow_interrupt 的结果，决定调用方的控制流。"""
+
+    aborted: bool        # 命令要求中止整个工作流
+    handled: bool        # 中断已处理：跳过本轮步骤
+    step_index: int      # 下一步索引
+    abort_message: str   # aborted 时的错误文案
 
 
 class BrowserWorkflowMixin:
@@ -474,7 +517,7 @@ class BrowserWorkflowMixin:
         )
 
     def execute_workflow(
-        self, 
+        self,
         messages: List[Dict],
         stream: bool = True,
         task_id: str = None,
@@ -486,13 +529,13 @@ class BrowserWorkflowMixin:
     ) -> Generator[str, None, None]:
         """
         工作流执行入口（v2.0 改进版）
-        
+
         改动：
         - 自动从池中获取标签页
         - 执行完自动释放
         """
         is_valid, error_msg, sanitized_messages = MessageValidator.validate(messages)
-        
+
         if not is_valid:
             yield self.formatter.pack_error(
                 f"无效请求: {error_msg}",
@@ -500,15 +543,15 @@ class BrowserWorkflowMixin:
                 code="invalid_messages"
             )
             return
-        
+
         if task_id is None:
             task_id = f"task_{time.time_ns()}"
         effective_stop_checker = stop_checker or self._should_stop_checker
-        
+
         session = None
         try:
             session = self.tab_pool.acquire(task_id, timeout=60)
-            
+
             if session is None and self._acquire_rejected_queue_full(task_id):
                 yield self._pack_acquire_queue_full_error()
                 yield self.formatter.pack_finish()
@@ -528,7 +571,7 @@ class BrowserWorkflowMixin:
                 task_id,
                 effective_stop_checker,
             )
-             
+
             if stream:
                 yield from self._execute_workflow_stream(
                     session,
@@ -549,7 +592,7 @@ class BrowserWorkflowMixin:
                     requested_model=requested_model,
                     **({"workflow_variables": workflow_variables} if workflow_variables else {}),
                 )
-        
+
         finally:
             if session:
                 self._release_workflow_session(
@@ -564,7 +607,7 @@ class BrowserWorkflowMixin:
                     pass
 
     def execute_workflow_for_tab_index(
-        self, 
+        self,
         tab_index: int,
         messages: List[Dict],
         stream: bool = True,
@@ -578,7 +621,7 @@ class BrowserWorkflowMixin:
     ) -> Generator[str, None, None]:
         """使用指定编号的标签页执行工作流"""
         is_valid, error_msg, sanitized_messages = MessageValidator.validate(messages)
-        
+
         if not is_valid:
             yield self.formatter.pack_error(
                 f"无效请求: {error_msg}",
@@ -586,15 +629,15 @@ class BrowserWorkflowMixin:
                 code="invalid_messages"
             )
             return
-        
+
         if task_id is None:
             task_id = f"tab{tab_index}_{time.time_ns()}"
         effective_stop_checker = stop_checker or self._should_stop_checker
-        
+
         session = None
         try:
             session = self.tab_pool.acquire_by_index(tab_index, task_id, timeout=60)
-            
+
             if session is None and self._acquire_rejected_queue_full(task_id):
                 yield self._pack_acquire_queue_full_error()
                 yield self.formatter.pack_finish()
@@ -614,7 +657,7 @@ class BrowserWorkflowMixin:
                 task_id,
                 effective_stop_checker,
             )
-             
+
             if stream:
                 yield from self._execute_workflow_stream(
                     session,
@@ -637,7 +680,7 @@ class BrowserWorkflowMixin:
                     requested_model=requested_model,
                     **({"workflow_variables": workflow_variables} if workflow_variables else {}),
                 )
-        
+
         finally:
             if session:
                 self._release_workflow_session(
@@ -1579,6 +1622,347 @@ class BrowserWorkflowMixin:
             obj in lowered for obj in chinese_objects
         )
 
+    def _resolve_workflow_entry(
+        self,
+        session: TabSession,
+        tab: Any,
+        stop_checker: Callable[[], bool],
+    ) -> "_WorkflowEntry":
+        """判定工作流入口的致命前置条件，返回解析结果。
+
+        error_code 非 None 时调用方应立即 yield 对应错误并结束；
+        判定顺序即下面各分支的书写顺序，不可调换（取消优先于标签页
+        访问，空白页优先于网络错误）。
+        """
+        if stop_checker():
+            return _WorkflowEntry("cancelled", "")
+
+        try:
+            url = tab.url
+        except Exception as e:
+            logger.warning(f"[{session.id}] 标签页访问失败: {e}")
+            session.mark_error("tab_access_failed")
+            return _WorkflowEntry("tab_closed", "")
+
+        if not url:
+            return _WorkflowEntry("no_page", "")
+
+        if url in _WORKFLOW_INVALID_ENTRY_URLS:
+            return _WorkflowEntry("blank_page", "")
+
+        if "chrome-error://" in url or "about:neterror" in url:
+            return _WorkflowEntry("page_error", "")
+
+        try:
+            domain = extract_remote_site_domain(url)
+            if not domain:
+                raise ValueError(f"not a remote site url: {url}")
+            session.current_domain = domain
+        except Exception as e:
+            logger.warning(f"[{session.id}] URL 解析失败: {url}, 错误: {e}")
+            return _WorkflowEntry("invalid_url", "")
+
+        return _WorkflowEntry(None, domain)
+
+    def _run_media_postprocess(
+        self,
+        tab,
+        session,
+        executor,
+        extractor,
+        image_config,
+        selectors,
+        result_container_selector,
+        user_images,
+        arena_image_generation_active,
+        should_run_media_postprocess,
+        dom_stream_media_items,
+        stream_media_items,
+        media_generation_state,
+        media_dom_baseline,
+        response_text_hint,
+        request_text_hint,
+        media_postprocess_diag,
+        _combined_stop_checker,
+    ) -> Generator[str, None, bool]:
+        """工作流结束后的多模态媒体提取与回传。
+
+        原为 _execute_workflow_stream_once 尾部的 159 行内联块。形参名与
+        原局部变量完全一致，方法体因此与提取前逐字节相同（仅缩进变化），
+        由 tests/test_workflow_media_postprocess_extraction.py 断言锁定。
+
+        产出媒体相关的 SSE 块，并返回值表示 workflow_aborted。
+        """
+        workflow_aborted = False
+        try:
+            if arena_image_generation_active:
+                arena_observation = ArenaImageGenerationGuard(
+                    tab,
+                    result_selector=result_container_selector,
+                    baseline_token=image_config.get("arena_result_baseline_token", ""),
+                    baseline_property=image_config.get("arena_result_baseline_property", ""),
+                ).observe(False)
+                if (
+                    arena_observation.is_complete
+                    and arena_observation.terminal_error is not None
+                ):
+                    raise arena_observation.terminal_error
+            media_items = []
+            if should_run_media_postprocess:
+                if dom_stream_media_items:
+                    media_items = [
+                        dict(item)
+                        for item in dom_stream_media_items
+                        if isinstance(item, dict)
+                    ]
+                    media_items = self._merge_dom_and_stream_media_items(
+                        media_items,
+                        stream_media_items or [],
+                        image_config,
+                    )
+                    image_items = [item for item in media_items if item.get("media_type") == "image"]
+                    if image_items:
+                        localized_images = self._localize_images_with_background_cache(
+                            image_items,
+                            wait_seconds=float(
+                                image_config.get("background_download_wait_seconds")
+                                or image_config.get("download_wait_seconds")
+                                or 1.0
+                            ),
+                        )
+                        other_items = [item for item in media_items if item.get("media_type") != "image"]
+                        media_items = localized_images + other_items
+                    logger.debug(
+                        f"[WORKFLOW] 复用 DOM 监听已提取的媒体结果: {len(media_items)} 项"
+                    )
+                else:
+                    direct_modalities = (
+                        media_postprocess_diag.get("direct_postprocess_modalities")
+                        if media_postprocess_diag.get("decision") == "direct_postprocess_modalities"
+                        else None
+                    )
+                    media_items = self._extract_media_after_stream(
+                        tab=tab,
+                        extractor=extractor,
+                        image_config=image_config,
+                        result_selector=result_container_selector,
+                        message_wrapper_selector=selectors.get("message_wrapper", ""),
+                        completion_id=executor._completion_id,
+                        stop_checker=_combined_stop_checker,
+                        response_text_hint=response_text_hint,
+                        request_text_hint=request_text_hint,
+                        media_generation_state=media_generation_state,
+                        stream_media_items=stream_media_items,
+                        direct_modalities=direct_modalities,
+                        media_dom_baseline=media_dom_baseline,
+                    )
+
+                    if not media_items and stream_media_items:
+                        valid_stream_images = [
+                            item
+                            for item in stream_media_items
+                            if isinstance(item, dict)
+                            and str(item.get("media_type") or "image").strip().lower() == "image"
+                            and (item.get("url") or item.get("data_uri"))
+                        ]
+                        if valid_stream_images:
+                            logger.info(
+                                f"[{session.id}] DOM 媒体提取为空，安全激活网络流图片候选 ({len(valid_stream_images)} 张) 进行本地化"
+                            )
+                            media_items = self._merge_dom_and_stream_media_items(
+                                [],
+                                valid_stream_images,
+                                image_config,
+                            )
+
+            if media_items:
+                download_urls = image_config.get("download_urls", False)
+                if download_urls:
+                    image_items = [item for item in media_items if item.get("media_type") == "image"]
+                    other_items = [item for item in media_items if item.get("media_type") != "image"]
+                    image_items = self._download_url_images(image_items, tab=tab)
+                    media_items = image_items + other_items
+
+                media_items = self._persist_remote_media_urls_to_local(
+                    media_items,
+                    tab=tab,
+                    max_size_mb=int(image_config.get("max_size_mb", 10) or 10),
+                    image_config=image_config,
+                )
+
+            if media_items and user_images:
+                media_items = filter_reference_images(
+                    media_items,
+                    user_images,
+                    tab=tab,
+                    logger_context=f"{session.id}:workflow",
+                )
+
+            if arena_image_generation_active:
+                generated_images = [
+                    item
+                    for item in media_items
+                    if isinstance(item, dict)
+                    and str(item.get("media_type") or item.get("type") or "image").lower()
+                    in {"image", "image_url", "input_image"}
+                ]
+                if not generated_images:
+                    raise ArenaImageGenerationError(
+                        "arena_image_generation_failed",
+                        "Arena 图片生成失败：未能提取新的生成图片",
+                    )
+                validate_generated_images(
+                    user_images,
+                    generated_images,
+                    tab=tab,
+                )
+
+            if media_items:
+                logger.debug(f"[PROBE] 即将发送多模态资源（Markdown），数量={len(media_items)}")
+
+                try:
+                    response_media = self._prepare_media_items_for_response(media_items)
+                    md = self._build_media_markdown_block(media_items)
+                    if md:
+                        yield self.formatter.pack_chunk(
+                            md,
+                            completion_id=executor._completion_id,
+                            media=response_media,
+                        )
+                        logger.debug(f"[MD_MEDIA] 已发送结构化多模态资源，共 {len(media_items)} 项")
+                    else:
+                        yield self.formatter.pack_chunk(
+                            "",
+                            completion_id=executor._completion_id,
+                            media=response_media,
+                        )
+                        logger.debug(f"[MD_MEDIA] 已发送纯结构化多模态资源，共 {len(media_items)} 项")
+                except Exception as e:
+                    logger.warning(f"[MD_MEDIA] 发送 Markdown 媒体链接失败: {e}")
+        except ArenaImageGenerationError as e:
+            workflow_aborted = True
+            logger.warning(
+                f"[{session.id}] Arena 图片媒体校验失败: code={e.code}, error={e.message}"
+            )
+            yield self.formatter.pack_error(
+                e.message,
+                error_type="invalid_request_error",
+                code=e.code,
+                status_code=e.status_code,
+                retryable=e.retryable,
+            )
+        except Exception as e:
+            logger.warning(f"[{session.id}] 多模态提取失败: {e}")
+        return workflow_aborted
+
+    def _handle_workflow_interrupt(
+        self,
+        session: TabSession,
+        command_engine: Any,
+        step_index: int,
+        workflow: List[Dict[str, Any]],
+        flow_program: Optional[FlowProgram],
+        executor: WorkflowExecutor,
+        selectors: Dict[str, Any],
+    ) -> Generator[str, None, "_InterruptOutcome"]:
+        """处理工作流执行过程中的命令中断。
+
+        原为 _execute_workflow_stream_once 主循环内的 62 行内联块。返回
+        _InterruptOutcome，由调用方决定 break / continue / 继续本轮：
+          aborted  -> 产出错误块后 break
+          handled  -> 中断已处理，跳过本轮步骤（step_index 可能前移）
+          两者皆否 -> 中断未被处理，不影响本轮步骤，落到下一条语句
+        """
+        workflow_abort_message = ""
+        interrupt_result = (
+            command_engine.handle_pending_workflow_interrupts(session)
+            if command_engine is not None
+            else {"handled": False, "abort": False, "message": ""}
+        )
+        if interrupt_result.get("abort"):
+            # workflow_aborted 由调用方据 outcome.aborted 设置
+            workflow_abort_message = str(
+                interrupt_result.get("message") or "工作流已被命令打断"
+            )
+            logger.error(
+                f"[{session.id}] 工作流被命令打断: "
+                f"{interrupt_result.get('abort_by') or 'unknown'}"
+            )
+            yield self.formatter.pack_error(
+                workflow_abort_message,
+                code="workflow_interrupted",
+            )
+            return _InterruptOutcome(True, False, step_index, workflow_abort_message)
+        if interrupt_result.get("handled"):
+            logger.info(f"[{session.id}] 工作流恢复执行")
+            try:
+                current_action = str(
+                    (workflow[step_index] or {}).get("action") or ""
+                ).strip().upper()
+                executor.rebuild_network_listener_after_external_interruption(
+                    "workflow_interrupt_resume",
+                    allow_dom_image_resume=current_action
+                    in {"STREAM_WAIT", "STREAM_OUTPUT"},
+                )
+            except Exception:
+                pass
+
+            stream_index = None
+            try:
+                if flow_program is None and executor.page_looks_generating(selectors.get("send_btn", "")):
+                    stream_index = self._find_next_stream_step_index(workflow, step_index)
+            except Exception:
+                stream_index = None
+
+            if stream_index is not None and stream_index != step_index:
+                logger.info(
+                    f"[{session.id}] 外部验证后检测到页面已在生成，"
+                    f"跳过到监听步骤: {step_index + 1}->{stream_index + 1}"
+                )
+                return _InterruptOutcome(False, True, stream_index, "")
+                # 出口已在上一行返回
+
+            resume_index = (self._find_resume_step_after_interrupt(
+                workflow, step_index,
+            ) if flow_program is None else step_index)
+            if resume_index != step_index:
+                logger.info(
+                    f"[{session.id}] 外部验证后跳过清理/停止步骤，"
+                    f"恢复到安全步骤: {step_index + 1}->{resume_index + 1}"
+                )
+                return _InterruptOutcome(False, True, resume_index, "")
+                # 出口已在上一行返回
+            return _InterruptOutcome(False, True, step_index, "")
+        return _InterruptOutcome(False, False, step_index, "")
+
+    def _abort_on_arena_battle_redirect(
+        self,
+        session: TabSession,
+        tab: Any,
+        arena_recovery_url: str,
+        log_context: str,
+    ) -> Generator[str, None, bool]:
+        """步骤失败后检测页面是否落在意外 Battle 页面。
+
+        原为 except (ElementNotFoundError, WorkflowError) 与 except Exception
+        两处各 13 行的重复块，只差日志里的一个前缀词（"步骤失败时" /
+        "通用异常时"）。合并后两条路径不可能再各自漂移。
+
+        返回 True 表示应终止工作流，调用方须置 workflow_aborted 并 break。
+        """
+        current_err_url = str(getattr(tab, "url", "") or "").strip()
+        if not is_arena_unexpected_battle_url(current_err_url):
+            return False
+        logger.warning(
+            f"[{session.id}] [ArenaDirectGuard] {log_context}检测到页面处于意外 Battle 页面: "
+            f"current_url={current_err_url}, recovery_url={arena_recovery_url}"
+        )
+        yield self.formatter.pack_error(
+            "stream_terminal_error:arena_direct_unexpected_battle_redirect",
+            code="arena_direct_unexpected_battle_redirect",
+        )
+        return True
+
     @attachment_scope
     def _execute_workflow_stream_once(
         self,
@@ -1612,63 +1996,16 @@ class BrowserWorkflowMixin:
             )
         except Exception:
             workflow_priority_value = 2
-    
-        if effective_stop_checker():
-            yield self.formatter.pack_error("请求已取消", code="cancelled")
-            yield self.formatter.pack_finish()
-            return
-    
-        try:
-            url = tab.url
-        except Exception as e:
-            logger.warning(f"[{session.id}] 标签页访问失败: {e}")
-            session.mark_error("tab_access_failed")
+
+        entry = self._resolve_workflow_entry(session, tab, effective_stop_checker)
+        if entry.error_code is not None:
             yield self.formatter.pack_error(
-                "标签页已关闭或失效，请刷新页面后重试",
-                code="tab_closed"
+                _WORKFLOW_ENTRY_ERROR_MESSAGES[entry.error_code], code=entry.error_code
             )
             yield self.formatter.pack_finish()
             return
-    
-        if not url:
-            yield self.formatter.pack_error(
-                "请先打开目标AI网站",
-                code="no_page"
-            )
-            yield self.formatter.pack_finish()
-            return
-    
-        invalid_urls = ("about:blank", "chrome://newtab/", "chrome://new-tab-page/")
-        if url in invalid_urls:
-            yield self.formatter.pack_error(
-                "当前是空白页，请先打开目标AI网站",
-                code="blank_page"
-            )
-            yield self.formatter.pack_finish()
-            return
-    
-        if "chrome-error://" in url or "about:neterror" in url:
-            yield self.formatter.pack_error(
-                "页面加载错误，请刷新后重试",
-                code="page_error"
-            )
-            yield self.formatter.pack_finish()
-            return
-    
-        try:
-            domain = extract_remote_site_domain(url)
-            if not domain:
-                raise ValueError(f"not a remote site url: {url}")
-            session.current_domain = domain
-        except Exception as e:
-            logger.warning(f"[{session.id}] URL 解析失败: {url}, 错误: {e}")
-            yield self.formatter.pack_error(
-                "当前页面不是可解析的网站，请打开真实的远程站点页面后再试",
-                code="invalid_url"
-            )
-            yield self.formatter.pack_finish()
-            return
-    
+        domain = entry.domain
+
         tab_url = getattr(tab, "url", "")
         tab_id = getattr(tab, "tab_id", "")
         logger.info(
@@ -1676,7 +2013,7 @@ class BrowserWorkflowMixin:
             f"domain={domain!r}, current_url={tab_url!r}, requested_model={requested_model!r}, "
             f"preset={preset_name!r}, session_preset={session.preset_name!r}"
         )
-        
+
         page_status = self._check_page_status(tab)
         if not page_status["ready"]:
             yield self.formatter.pack_error(
@@ -1685,7 +2022,7 @@ class BrowserWorkflowMixin:
             )
             yield self.formatter.pack_finish()
             return
-        
+
         config_engine = self._get_config_engine()
         effective_preset_name = preset_name if preset_name is not None else session.preset_name
 
@@ -1706,7 +2043,7 @@ class BrowserWorkflowMixin:
             )
             yield self.formatter.pack_finish()
             return
-        
+
         selectors = site_config.get("selectors", {})
         setattr(
             session,
@@ -1834,7 +2171,7 @@ class BrowserWorkflowMixin:
                 f"[{session.id}] 本轮将新建对话: domain={domain}, "
                 f"preset={resolved_preset_name}, threshold={conversation_threshold}s"
             )
-        
+
         image_config = dict(site_config.get("image_extraction", {}) or {})
         modalities = image_config.get("modalities") or {}
         image_extraction_enabled = bool(image_config.get("enabled", False)) or any(
@@ -2034,7 +2371,7 @@ class BrowserWorkflowMixin:
                 site_catalog_fallback if isinstance(site_catalog_fallback, dict) else {}
             ),
         }
-        
+
         extractor = config_engine.get_site_extractor(domain, preset_name=effective_preset_name)
         site_advanced_config = config_engine.get_site_advanced_config(
             domain,
@@ -2081,7 +2418,7 @@ class BrowserWorkflowMixin:
                 setattr(session, "_workflow_stop_reason", "command_interrupt")
                 return True
             return False
-        
+
         executor = WorkflowExecutor(
             tab=tab,
             stealth_mode=stealth_mode,
@@ -2102,7 +2439,7 @@ class BrowserWorkflowMixin:
             executor._begin_workflow_scripts()
         except Exception as e:
             logger.debug(f"[{session.id}] 工作流脚本边界初始化失败（忽略）: {e}")
-        
+
         result_container_selector = selectors.get("result_container", "")
         setattr(session, "_workflow_stop_reason", None)
         if not effective_stop_checker():
@@ -2113,7 +2450,7 @@ class BrowserWorkflowMixin:
         media_dom_baseline_captured = False
         arena_result_baseline_captured = False
         flow_program = None
-        
+
         try:
             with executor.workflow_execution_scope():
                 if has_control_flow(workflow) or workflow_variables:
@@ -2169,64 +2506,16 @@ class BrowserWorkflowMixin:
                     if stop_reason == "command_interrupt" or (
                         command_engine is not None and command_engine.workflow_interrupt_requested(session)
                     ):
-                        interrupt_result = (
-                            command_engine.handle_pending_workflow_interrupts(session)
-                            if command_engine is not None
-                            else {"handled": False, "abort": False, "message": ""}
+                        outcome = yield from self._handle_workflow_interrupt(
+                            session, command_engine, step_index, workflow,
+                            flow_program, executor, selectors,
                         )
-                        if interrupt_result.get("abort"):
+                        if outcome.aborted:
                             workflow_aborted = True
-                            workflow_abort_message = str(
-                                interrupt_result.get("message") or "工作流已被命令打断"
-                            )
-                            logger.error(
-                                f"[{session.id}] 工作流被命令打断: "
-                                f"{interrupt_result.get('abort_by') or 'unknown'}"
-                            )
-                            yield self.formatter.pack_error(
-                                workflow_abort_message,
-                                code="workflow_interrupted",
-                            )
+                            workflow_abort_message = outcome.abort_message
                             break
-                        if interrupt_result.get("handled"):
-                            logger.info(f"[{session.id}] 工作流恢复执行")
-                            try:
-                                current_action = str(
-                                    (workflow[step_index] or {}).get("action") or ""
-                                ).strip().upper()
-                                executor.rebuild_network_listener_after_external_interruption(
-                                    "workflow_interrupt_resume",
-                                    allow_dom_image_resume=current_action
-                                    in {"STREAM_WAIT", "STREAM_OUTPUT"},
-                                )
-                            except Exception:
-                                pass
-
-                            stream_index = None
-                            try:
-                                if flow_program is None and executor.page_looks_generating(selectors.get("send_btn", "")):
-                                    stream_index = self._find_next_stream_step_index(workflow, step_index)
-                            except Exception:
-                                stream_index = None
-
-                            if stream_index is not None and stream_index != step_index:
-                                logger.info(
-                                    f"[{session.id}] 外部验证后检测到页面已在生成，"
-                                    f"跳过到监听步骤: {step_index + 1}->{stream_index + 1}"
-                                )
-                                step_index = stream_index
-                                continue
-
-                            resume_index = (self._find_resume_step_after_interrupt(
-                                workflow, step_index,
-                            ) if flow_program is None else step_index)
-                            if resume_index != step_index:
-                                logger.info(
-                                    f"[{session.id}] 外部验证后跳过清理/停止步骤，"
-                                    f"恢复到安全步骤: {step_index + 1}->{resume_index + 1}"
-                                )
-                                step_index = resume_index
-                                continue
+                        step_index = outcome.step_index
+                        if outcome.handled:
                             continue
 
                     if effective_stop_checker():
@@ -2497,17 +2786,10 @@ class BrowserWorkflowMixin:
                             f"error={str(e).strip() or type(e).__name__}"
                         )
                         if arena_direct_active:
-                            current_err_url = str(getattr(tab, "url", "") or "").strip()
-                            if is_arena_unexpected_battle_url(current_err_url):
-                                logger.warning(
-                                    f"[{session.id}] [ArenaDirectGuard] 步骤失败时检测到页面处于意外 Battle 页面: "
-                                    f"current_url={current_err_url}, recovery_url={arena_recovery_url}"
-                                )
+                            if (yield from self._abort_on_arena_battle_redirect(
+                                session, tab, arena_recovery_url, "步骤失败时"
+                            )):
                                 workflow_aborted = True
-                                yield self.formatter.pack_error(
-                                    "stream_terminal_error:arena_direct_unexpected_battle_redirect",
-                                    code="arena_direct_unexpected_battle_redirect",
-                                )
                                 break
 
                         if isinstance(e, WorkflowError):
@@ -2556,20 +2838,13 @@ class BrowserWorkflowMixin:
                             f"optional={bool(optional)}, error={str(e).strip() or type(e).__name__}"
                         )
                         if arena_direct_active:
-                            current_err_url = str(getattr(tab, "url", "") or "").strip()
-                            if is_arena_unexpected_battle_url(current_err_url):
-                                logger.warning(
-                                    f"[{session.id}] [ArenaDirectGuard] 通用异常时检测到页面处于意外 Battle 页面: "
-                                    f"current_url={current_err_url}, recovery_url={arena_recovery_url}"
-                                )
+                            if (yield from self._abort_on_arena_battle_redirect(
+                                session, tab, arena_recovery_url, "通用异常时"
+                            )):
                                 workflow_aborted = True
-                                yield self.formatter.pack_error(
-                                    "stream_terminal_error:arena_direct_unexpected_battle_redirect",
-                                    code="arena_direct_unexpected_battle_redirect",
-                                )
                                 break
                         if not optional:
-                            yield self.formatter.pack_error(f"执行中断: {str(e)}")
+                            yield self.formatter.pack_error(f"执行中断: {e!s}")
                             break
 
             if (
@@ -2651,170 +2926,31 @@ class BrowserWorkflowMixin:
                         "[WORKFLOW] 进入多模态提取分支："
                         f"{json.dumps(media_postprocess_diag, ensure_ascii=False)}"
                     )
-                try:
-                    if arena_image_generation_active:
-                        arena_observation = ArenaImageGenerationGuard(
-                            tab,
-                            result_selector=result_container_selector,
-                            baseline_token=image_config.get("arena_result_baseline_token", ""),
-                            baseline_property=image_config.get("arena_result_baseline_property", ""),
-                        ).observe(False)
-                        if (
-                            arena_observation.is_complete
-                            and arena_observation.terminal_error is not None
-                        ):
-                            raise arena_observation.terminal_error
-                    media_items = []
-                    if should_run_media_postprocess:
-                        if dom_stream_media_items:
-                            media_items = [
-                                dict(item)
-                                for item in dom_stream_media_items
-                                if isinstance(item, dict)
-                            ]
-                            media_items = self._merge_dom_and_stream_media_items(
-                                media_items,
-                                stream_media_items or [],
-                                image_config,
-                            )
-                            image_items = [item for item in media_items if item.get("media_type") == "image"]
-                            if image_items:
-                                localized_images = self._localize_images_with_background_cache(
-                                    image_items,
-                                    wait_seconds=float(
-                                        image_config.get("background_download_wait_seconds")
-                                        or image_config.get("download_wait_seconds")
-                                        or 1.0
-                                    ),
-                                )
-                                other_items = [item for item in media_items if item.get("media_type") != "image"]
-                                media_items = localized_images + other_items
-                            logger.debug(
-                                f"[WORKFLOW] 复用 DOM 监听已提取的媒体结果: {len(media_items)} 项"
-                            )
-                        else:
-                            direct_modalities = (
-                                media_postprocess_diag.get("direct_postprocess_modalities")
-                                if media_postprocess_diag.get("decision") == "direct_postprocess_modalities"
-                                else None
-                            )
-                            media_items = self._extract_media_after_stream(
-                                tab=tab,
-                                extractor=extractor,
-                                image_config=image_config,
-                                result_selector=result_container_selector,
-                                message_wrapper_selector=selectors.get("message_wrapper", ""),
-                                completion_id=executor._completion_id,
-                                stop_checker=_combined_stop_checker,
-                                response_text_hint=response_text_hint,
-                                request_text_hint=request_text_hint,
-                                media_generation_state=media_generation_state,
-                                stream_media_items=stream_media_items,
-                                direct_modalities=direct_modalities,
-                                media_dom_baseline=media_dom_baseline,
-                            )
+                workflow_aborted = yield from self._run_media_postprocess(
+                    tab,
+                    session,
+                    executor,
+                    extractor,
+                    image_config,
+                    selectors,
+                    result_container_selector,
+                    user_images,
+                    arena_image_generation_active,
+                    should_run_media_postprocess,
+                    dom_stream_media_items,
+                    stream_media_items,
+                    media_generation_state,
+                    media_dom_baseline,
+                    response_text_hint,
+                    request_text_hint,
+                    media_postprocess_diag,
+                    _combined_stop_checker,
+                )
 
-                            if not media_items and stream_media_items:
-                                valid_stream_images = [
-                                    item
-                                    for item in stream_media_items
-                                    if isinstance(item, dict)
-                                    and str(item.get("media_type") or "image").strip().lower() == "image"
-                                    and (item.get("url") or item.get("data_uri"))
-                                ]
-                                if valid_stream_images:
-                                    logger.info(
-                                        f"[{session.id}] DOM 媒体提取为空，安全激活网络流图片候选 ({len(valid_stream_images)} 张) 进行本地化"
-                                    )
-                                    media_items = self._merge_dom_and_stream_media_items(
-                                        [],
-                                        valid_stream_images,
-                                        image_config,
-                                    )
-                    
-                    if media_items:
-                        download_urls = image_config.get("download_urls", False)
-                        if download_urls:
-                            image_items = [item for item in media_items if item.get("media_type") == "image"]
-                            other_items = [item for item in media_items if item.get("media_type") != "image"]
-                            image_items = self._download_url_images(image_items, tab=tab)
-                            media_items = image_items + other_items
-
-                        media_items = self._persist_remote_media_urls_to_local(
-                            media_items,
-                            tab=tab,
-                            max_size_mb=int(image_config.get("max_size_mb", 10) or 10),
-                            image_config=image_config,
-                        )
-
-                    if media_items and user_images:
-                        media_items = filter_reference_images(
-                            media_items,
-                            user_images,
-                            tab=tab,
-                            logger_context=f"{session.id}:workflow",
-                        )
-
-                    if arena_image_generation_active:
-                        generated_images = [
-                            item
-                            for item in media_items
-                            if isinstance(item, dict)
-                            and str(item.get("media_type") or item.get("type") or "image").lower()
-                            in {"image", "image_url", "input_image"}
-                        ]
-                        if not generated_images:
-                            raise ArenaImageGenerationError(
-                                "arena_image_generation_failed",
-                                "Arena 图片生成失败：未能提取新的生成图片",
-                            )
-                        validate_generated_images(
-                            user_images,
-                            generated_images,
-                            tab=tab,
-                        )
-
-                    if media_items:
-                        logger.debug(f"[PROBE] 即将发送多模态资源（Markdown），数量={len(media_items)}")
-
-                        try:
-                            response_media = self._prepare_media_items_for_response(media_items)
-                            md = self._build_media_markdown_block(media_items)
-                            if md:
-                                yield self.formatter.pack_chunk(
-                                    md,
-                                    completion_id=executor._completion_id,
-                                    media=response_media,
-                                )
-                                logger.debug(f"[MD_MEDIA] 已发送结构化多模态资源，共 {len(media_items)} 项")
-                            else:
-                                yield self.formatter.pack_chunk(
-                                    "",
-                                    completion_id=executor._completion_id,
-                                    media=response_media,
-                                )
-                                logger.debug(f"[MD_MEDIA] 已发送纯结构化多模态资源，共 {len(media_items)} 项")
-                        except Exception as e:
-                            logger.warning(f"[MD_MEDIA] 发送 Markdown 媒体链接失败: {e}")
-                except ArenaImageGenerationError as e:
-                    workflow_aborted = True
-                    logger.warning(
-                        f"[{session.id}] Arena 图片媒体校验失败: code={e.code}, error={e.message}"
-                    )
-                    yield self.formatter.pack_error(
-                        e.message,
-                        error_type="invalid_request_error",
-                        code=e.code,
-                        status_code=e.status_code,
-                        retryable=e.retryable,
-                    )
-                except Exception as e:
-                    logger.warning(f"[{session.id}] 多模态提取失败: {e}")
-        
         except Exception as e:
             if not (effective_stop_checker()):
                 logger.error(f"[{session.id}] 工作流执行异常: {e}", exc_info=True)
-                yield self.formatter.pack_error(f"系统错误: {str(e)}")
+                yield self.formatter.pack_error(f"系统错误: {e!s}")
         finally:
             if flow_program is not None:
                 try:
@@ -2845,7 +2981,7 @@ class BrowserWorkflowMixin:
         yield self.formatter.pack_finish()
 
     def _execute_workflow_non_stream(
-        self, 
+        self,
         session: TabSession,
         messages: List[Dict],
         preset_name: Optional[str] = None,
@@ -2859,7 +2995,7 @@ class BrowserWorkflowMixin:
         collected_content = []
         collected_media = []
         error_data = None
-        
+
         stream = self._execute_workflow_stream(
             session,
             messages,
@@ -2875,14 +3011,14 @@ class BrowserWorkflowMixin:
             for chunk in stream:
                 if chunk.startswith("data: [DONE]"):
                     continue
-                
+
                 if chunk.startswith("data: "):
                     try:
                         data_str = chunk[6:].strip()
                         if not data_str:
                             continue
                         data = json.loads(data_str)
-                        
+
                         if "error" in data:
                             error_data = data
                             break
@@ -2890,7 +3026,7 @@ class BrowserWorkflowMixin:
                         media_items = data.get("media")
                         if isinstance(media_items, list):
                             collected_media.extend(media_items)
-                        
+
                         if "choices" in data and data["choices"]:
                             delta = data["choices"][0].get("delta", {})
                             content = delta.get("content", "")
@@ -2905,7 +3041,7 @@ class BrowserWorkflowMixin:
         finally:
             with contextlib.suppress(Exception):
                 stream.close()
-        
+
         if not error_data:
             failure = getattr(session, "_workflow_failure", None)
             if isinstance(failure, dict) and failure.get("task_id") == str(getattr(session, "current_task_id", "") or ""):

@@ -9,10 +9,11 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
+
+from app.api import config_workflow_support as support
 from app.core.config import WorkflowError
 from app.core.workflow.flow_runtime import FlowProgram, has_control_flow
 from app.core.workflow.preview import preview_workflow
-from app.api import config_workflow_support as support
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -158,7 +159,7 @@ def test_structured_workflow_cannot_be_replayed_by_legacy_outer_retry():
 
 
 def test_history_appends_multiple_runs_with_privacy_and_size_bound():
-    from app.services.request_manager import RequestManager, RequestContext
+    from app.services.request_manager import RequestContext, RequestManager
     ctx = RequestContext(request_id='r')
     manager = object.__new__(RequestManager)
     manager.get_request = lambda request_id: ctx
@@ -178,8 +179,8 @@ def test_embedded_css_matches_canonical_source():
 
 
 def test_visual_feedback_reports_resolved_target_and_honors_page_cancel(monkeypatch):
+
     from app.api import config_workflow_support as support
-    import time
     phases=[];calls=[];instances=[]
     class Executor:
         def __init__(self, **kwargs): self.stop=kwargs['should_stop_checker'];self.cleaned=False;instances.append(self)

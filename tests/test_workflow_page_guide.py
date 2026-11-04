@@ -1,16 +1,15 @@
 """Real Chromium regression on a synthetic webpage, no AI account or external network.
 Covers physical drag/pick, configuration round-trip, and real target clicks using the DSL.
 """
-import copy
 import json
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("playwright.sync_api")
-from playwright.sync_api import expect  # noqa: E402
+from playwright.sync_api import expect
 
-from tests._playwright import launch_chromium, sync_playwright  # noqa: E402
+from tests._playwright import launch_chromium, sync_playwright
 
 pytestmark = pytest.mark.browser
 

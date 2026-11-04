@@ -142,8 +142,9 @@ def test_tampered_official_file_aborts_without_writing(env):
 def test_api_routes_are_wired(monkeypatch, env):
     import asyncio
 
-    import main
     from httpx import ASGITransport, AsyncClient
+
+    import main
     from app.services import adapter_updates
 
     updater, _, _, _ = env

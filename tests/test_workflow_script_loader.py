@@ -13,13 +13,11 @@ tests/test_workflow_script_loader.py - ScriptLoader 单元测试
 """
 
 import os
-import tempfile
 import time
 import unittest
-from pathlib import Path
 
 from app.core.config import WorkflowError
-from app.core.workflow.script_loader import ScriptLoader, script_loader
+from app.core.workflow.script_loader import ScriptLoader
 
 
 class TestWorkflowScriptLoader(unittest.TestCase):

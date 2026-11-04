@@ -9,15 +9,15 @@ Responsibilities:
 - Selector definitions
 """
 
-import copy
 import asyncio
+import copy
 import json
 import math
 import time
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.api.config_compare_support import (
@@ -28,8 +28,8 @@ from app.api.config_compare_support import (
 from app.api.config_route_models import (
     ConfigUpdateRequest,
     ModelCatalogUpdateRequest,
-    SiteAdvancedConfigRequest,
     PresetConfigUpdateRequest,
+    SiteAdvancedConfigRequest,
     _extract_site_advanced_update_payload,
     _get_model_fields_set,
     _merge_preset_config_payload,
@@ -37,21 +37,21 @@ from app.api.config_route_models import (
 )
 from app.api.config_workflow_support import (
     _execute_workflow_editor_test_payload,
+    _load_workflow_script_content,
     _notify_workflow_editor_action_result,
     _notify_workflow_editor_action_status,
     _save_site_workflow_payload,
     _scan_workflow_scripts,
-    _load_workflow_script_content,
 )
 from app.api.deps import verify_auth
-from app.core import get_browser, BrowserConnectionError
+from app.core import BrowserConnectionError, get_browser
 from app.core.config import get_logger
+from app.core.driver import driver_for_tab
 from app.models.schemas import PRESET_ADVANCED_FIELDS, SITE_ADVANCED_FIELDS
 from app.services.config_engine import config_engine
 from app.services.extractor_manager import extractor_manager
-from app.utils.site_url import extract_remote_site_domain
 from app.utils.similarity import verify_extraction
-from app.core.driver import driver_for_tab
+from app.utils.site_url import extract_remote_site_domain
 
 logger = get_logger('API.CONFIG')
 
@@ -174,7 +174,7 @@ async def save_config(
                             status_code=400,
                             detail=f"站点配置必须是对象: {domain}",
                         )
-                    from app.core.workflow.flow_runtime import has_control_flow, validate_workflow, FlowValidationError
+                    from app.core.workflow.flow_runtime import FlowValidationError, has_control_flow, validate_workflow
                     candidates = list((raw_site.get("presets") or {}).values()) if isinstance(raw_site.get("presets"), dict) else [raw_site]
                     for candidate in candidates:
                         if isinstance(candidate, dict) and has_control_flow(candidate.get("workflow", [])):
@@ -739,8 +739,8 @@ async def inject_workflow_editor(
     authenticated: bool = Depends(verify_auth),
 ):
     """向当前活动标签页注入可视化工作流编辑器"""
-    from app.core.workflow_editor import workflow_editor_injector
     from app.core.browser import get_browser
+    from app.core.workflow_editor import workflow_editor_injector
 
     try:
         target_domain = None
@@ -765,7 +765,7 @@ async def inject_workflow_editor(
         except Exception as e:
             return JSONResponse(
                 status_code=503,
-                content={"success": False, "message": f"无法获取标签页: {str(e)}"}
+                content={"success": False, "message": f"无法获取标签页: {e!s}"}
             )
 
         url = tab.url or ""
@@ -1075,8 +1075,8 @@ async def get_workflow_script_content(
 @router.post("/api/workflow-editor/clear-cache")
 async def clear_editor_cache(authenticated: bool = Depends(verify_auth)):
     """清除编辑器脚本缓存（开发调试用）"""
-    from app.core.workflow_editor import workflow_editor_injector
     from app.core.workflow.script_loader import script_loader
+    from app.core.workflow_editor import workflow_editor_injector
     workflow_editor_injector.clear_cache()
     script_loader.clear_cache()
     return {"success": True, "message": "缓存已清除"}
@@ -1592,8 +1592,8 @@ async def list_parsers(authenticated: bool = Depends(verify_auth)):
 @router.get("/api/settings/stream-config-defaults")
 async def get_stream_config_defaults(authenticated: bool = Depends(verify_auth)):
     """获取流式配置的默认值和限制"""
-    from app.services.config.engine import get_default_stream_config, get_default_network_config
     from app.core.request_transport import get_request_transport_defaults_payload
+    from app.services.config.engine import get_default_network_config, get_default_stream_config
 
     return {
         "defaults": get_default_stream_config(),
@@ -1658,7 +1658,7 @@ async def set_site_model_catalog(
 @router.post("/api/workflow/validate")
 async def validate_workflow_draft(request: Request, authenticated: bool = Depends(verify_auth)):
     """Validate a draft without saving it or connecting to a browser."""
-    from app.core.workflow.flow_runtime import validate_workflow, FlowValidationError
+    from app.core.workflow.flow_runtime import FlowValidationError, validate_workflow
     data = await _read_json_object_or_400(request)
     try:
         return validate_workflow(data.get("workflow"))
@@ -1669,8 +1669,8 @@ async def validate_workflow_draft(request: Request, authenticated: bool = Depend
 @router.post("/api/workflow/preview")
 async def preview_workflow_draft(request: Request, authenticated: bool = Depends(verify_auth)):
     """Explicit simulation: supplied capture fixtures, no page actions."""
-    from app.core.workflow.preview import preview_workflow
     from app.core.workflow.flow_runtime import FlowValidationError
+    from app.core.workflow.preview import preview_workflow
     data = await _read_json_object_or_400(request)
     try:
         return await asyncio.to_thread(preview_workflow, data)

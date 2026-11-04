@@ -26,8 +26,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from app.core.config import logger
-from .base import ResponseParser
 
+from .base import ResponseParser
 
 # ─────────────────────────────────────────────────────
 # cp1252 → latin-1 逆映射表（模块级常量，只构建一次）

@@ -1,13 +1,12 @@
 """Request models and preset normalization helpers for config routes."""
 
 import copy
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from app.models.schemas import ADVANCED_FIELDS, PRESET_ADVANCED_FIELDS, SITE_ADVANCED_FIELDS
-from app.services.arena_direct_models import normalize_model_catalog_config
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -147,7 +146,7 @@ def _normalize_preset_config_payload(
     elif not isinstance(workflow, list):
         raise HTTPException(status_code=400, detail="workflow 必须是数组")
 
-    from app.core.workflow.flow_runtime import has_control_flow, validate_workflow, FlowValidationError
+    from app.core.workflow.flow_runtime import FlowValidationError, has_control_flow, validate_workflow
     if has_control_flow(normalized.get("workflow", [])):
         try:
             validate_workflow(normalized["workflow"])

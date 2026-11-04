@@ -7,7 +7,7 @@ import asyncio
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.services.metrics import Counter, Gauge, Histogram, REQUEST_ID
+from app.services.metrics import REQUEST_ID, Counter, Gauge, Histogram
 
 
 def test_metric_text_format():

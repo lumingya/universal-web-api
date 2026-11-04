@@ -1,7 +1,9 @@
 """Conservative automatic site admission; explicit user configs are not restricted."""
 from __future__ import annotations
+
 import re
 from typing import Any
+
 from app.utils.site_rules import get_site_rule
 from app.utils.site_url import extract_remote_site_domain, normalize_route_domain
 

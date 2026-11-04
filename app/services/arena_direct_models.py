@@ -13,9 +13,8 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from app.core.config import logger
-from app.utils.site_url import extract_remote_site_domain, route_domain_matches
 from app.core.driver import driver_for_tab
-
+from app.utils.site_url import extract_remote_site_domain, route_domain_matches
 
 ARENA_DIRECT_MODEL_PREFIX = "arena.ai/direct/"
 ARENA_DIRECT_MODEL_CACHE_TTL = 300.0
@@ -429,6 +428,133 @@ def _natural_sort_key(text: Any) -> list:
     return [int(part) if part.isdecimal() else part.casefold() for part in re.split(r"(\d+)", value)]
 
 
+# 名字里出现这些关键词、且没有显式 modality 时判定为生图模型。
+_MODEL_IMAGE_KEYWORDS = (
+    "gpt-image",
+    "mona-lisa",
+    "luna-lisa",
+    "lina-alpha",
+    "lina-f-alpha",
+    "silver_halide",
+    "flux",
+    "seedream",
+    "seededit",
+    "imagen",
+    "z-image",
+    "midjourney",
+    "dall-e",
+    "recraft",
+    "krea",
+    "grok-imagine",
+)
+
+
+def _model_identity(raw: Dict[str, Any]):
+    """取出 (arena_model_id, name)；任一为空表示该条目无效，返回 (None, None)。
+
+    name 的回退链是 name -> display_name -> public_name。
+    """
+    arena_model_id = str(raw.get("arena_model_id") or "").strip()
+    name = str(raw.get("name") or raw.get("display_name") or raw.get("public_name") or "").strip()
+    if not arena_model_id or not name:
+        return None, None
+    return arena_model_id, name
+
+
+def _first_non_empty(*values) -> str:
+    """取第一个为真的值并 strip。"""
+    for value in values:
+        if value:
+            return str(value).strip()
+    return ""
+
+
+def _model_override_for(alias_overrides, name: str, display_name: str, public_name: str) -> Dict[str, Any]:
+    """按 name -> display_name -> public_name 的顺序查别名覆盖，查不到返回 {}。"""
+    override = (
+        alias_overrides.get(name.casefold())
+        or alias_overrides.get(display_name.casefold())
+        or alias_overrides.get(public_name.casefold())
+    )
+    return override if isinstance(override, dict) else {}
+
+
+def _add_alias_once(aliases: List[str], text: str) -> None:
+    """去空白后非空、且大小写不重复才追加。"""
+    alias_text = str(text or "").strip()
+    if alias_text and alias_text.casefold() not in {item.casefold() for item in aliases}:
+        aliases.append(alias_text)
+
+
+def _model_aliases(
+    name: str,
+    public_name: str,
+    display_name: str,
+    search_name: str,
+    override: Dict[str, Any],
+) -> List[str]:
+    """收集别名：四个名字 + 覆盖配置里的额外别名，再加上三种派生形式。
+
+    派生对 (display_name, public_name, search_name, name) 依次做：
+    取括号前的部分、去掉 `-high` 后缀、去掉 `-preview` 后缀。
+    """
+    aliases: List[str] = []
+    extra = override.get("aliases")
+    base_candidates = (name, public_name, display_name, search_name)
+    if isinstance(extra, list):
+        base_candidates = (*base_candidates, *extra)
+    for alias in base_candidates:
+        _add_alias_once(aliases, alias)
+
+    for candidate_name in (display_name, public_name, search_name, name):
+        if not candidate_name:
+            continue
+        if "(" in candidate_name:
+            _add_alias_once(aliases, candidate_name.split("(")[0].strip())
+        if candidate_name.endswith("-high"):
+            _add_alias_once(aliases, candidate_name[:-5].strip())
+        if candidate_name.endswith("-preview"):
+            _add_alias_once(aliases, candidate_name[:-8].strip())
+    return aliases
+
+
+def _model_modality(raw: Dict[str, Any], name: str, display_name: str, public_name: str, arena_model_id: str) -> str:
+    """判定模态：优先用显式值（经规范化），否则按名字关键词兜底，最后取 text。"""
+    raw_modality = _canonical_modality(raw.get("modality"))
+    if raw_modality:
+        return raw_modality
+    name_check = f"{name} {display_name} {public_name} {arena_model_id}".lower()
+    if any(keyword in name_check for keyword in _MODEL_IMAGE_KEYWORDS):
+        return "image"
+    return "text"
+
+
+def _build_model_record(
+    raw: Dict[str, Any],
+    arena_model_id: str,
+    name: str,
+    alias_overrides: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """组装一条规范化后的模型记录。"""
+    public_name = _first_non_empty(raw.get("public_name"), raw.get("display_name"), name)
+    display_name = _first_non_empty(raw.get("display_name"), public_name, name)
+    override = _model_override_for(alias_overrides, name, display_name, public_name)
+    search_name = _first_non_empty(override.get("search_name"), display_name, public_name, name)
+    return {
+        "arena_model_id": arena_model_id,
+        "name": name,
+        "public_name": public_name or name,
+        "display_name": _first_non_empty(display_name, public_name, name),
+        "search_name": _first_non_empty(search_name, display_name, public_name, name),
+        "aliases": _model_aliases(name, public_name, display_name, search_name, override),
+        "provider": _first_non_empty(raw.get("provider")),
+        "organization": _first_non_empty(
+            raw.get("organization"), raw.get("provider"), "arena.ai"
+        ),
+        "modality": _model_modality(raw, name, display_name, public_name, arena_model_id),
+    }
+
+
 def _normalize_models(raw_models: Any) -> List[Dict[str, Any]]:
     if not isinstance(raw_models, list):
         return []
@@ -440,9 +566,8 @@ def _normalize_models(raw_models: Any) -> List[Dict[str, Any]]:
     for raw in raw_models:
         if not isinstance(raw, dict):
             continue
-        arena_model_id = str(raw.get("arena_model_id") or "").strip()
-        name = str(raw.get("name") or raw.get("display_name") or raw.get("public_name") or "").strip()
-        if not arena_model_id or not name:
+        arena_model_id, name = _model_identity(raw)
+        if arena_model_id is None:
             continue
         id_key = arena_model_id.lower()
         name_key = name.lower()
@@ -450,84 +575,8 @@ def _normalize_models(raw_models: Any) -> List[Dict[str, Any]]:
             continue
         seen_ids.add(id_key)
         seen_names.add(name_key)
-        public_name = str(raw.get("public_name") or raw.get("display_name") or name).strip()
-        display_name = str(raw.get("display_name") or public_name or name).strip()
-        override = (
-            alias_overrides.get(name.casefold())
-            or alias_overrides.get(display_name.casefold())
-            or alias_overrides.get(public_name.casefold())
-        )
-        if not isinstance(override, dict):
-            override = {}
-        search_name = str(
-            override.get("search_name") or display_name or public_name or name
-        ).strip()
-        aliases = []
-        for alias in (
-            name,
-            public_name,
-            display_name,
-            search_name,
-            *(override.get("aliases") or [] if isinstance(override.get("aliases"), list) else []),
-        ):
-            alias_text = str(alias or "").strip()
-            if alias_text and alias_text.casefold() not in {item.casefold() for item in aliases}:
-                aliases.append(alias_text)
-
-        for candidate_name in (display_name, public_name, search_name, name):
-            if not candidate_name:
-                continue
-            if "(" in candidate_name:
-                base_no_paren = candidate_name.split("(")[0].strip()
-                if base_no_paren and base_no_paren.casefold() not in {item.casefold() for item in aliases}:
-                    aliases.append(base_no_paren)
-            if candidate_name.endswith("-high"):
-                base_no_high = candidate_name[:-5].strip()
-                if base_no_high and base_no_high.casefold() not in {item.casefold() for item in aliases}:
-                    aliases.append(base_no_high)
-            if candidate_name.endswith("-preview"):
-                base_no_prev = candidate_name[:-8].strip()
-                if base_no_prev and base_no_prev.casefold() not in {item.casefold() for item in aliases}:
-                    aliases.append(base_no_prev)
-        raw_modality = _canonical_modality(raw.get("modality"))
-        name_check = f"{name} {display_name} {public_name} {arena_model_id}".lower()
-        if not raw_modality and any(
-            k in name_check
-            for k in (
-                "gpt-image",
-                "mona-lisa",
-                "luna-lisa",
-                "lina-alpha",
-                "lina-f-alpha",
-                "silver_halide",
-                "flux",
-                "seedream",
-                "seededit",
-                "imagen",
-                "z-image",
-                "midjourney",
-                "dall-e",
-                "recraft",
-                "krea",
-                "grok-imagine",
-            )
-        ):
-            raw_modality = "image"
-        normalized.append(
-            {
-                "arena_model_id": arena_model_id,
-                "name": name,
-                "public_name": public_name or name,
-                "display_name": display_name or public_name or name,
-                "search_name": search_name or display_name or public_name or name,
-                "aliases": aliases,
-                "provider": str(raw.get("provider") or "").strip(),
-                "organization": str(raw.get("organization") or raw.get("provider") or "arena.ai").strip(),
-                "modality": raw_modality or "text",
-            }
-        )
+        normalized.append(_build_model_record(raw, arena_model_id, name, alias_overrides))
     return normalized
-
 
 def _load_alias_overrides() -> Dict[str, Dict[str, Any]]:
     try:

@@ -2,6 +2,9 @@ import asyncio
 from types import SimpleNamespace
 
 from app.api import tab_routes
+from app.api.admin import pool as tab_pool_admin
+from app.api.openai import group as tab_group_routes
+from app.api.openai import runtime as tab_runtime
 from app.core.browser.workflow import BrowserWorkflowMixin
 from app.services.request_manager import RequestContext
 from app.utils.tab_route_groups import normalize_route_groups
@@ -45,9 +48,10 @@ def test_tab_pool_config_persists_and_hot_reloads_route_groups(monkeypatch):
         }
     }
 
-    monkeypatch.setattr(tab_routes, "_read_browser_config", lambda: config)
+    # 标签页池管理端点已迁到 app.api.admin.pool，补丁要打在它自己的命名空间上
+    monkeypatch.setattr(tab_pool_admin, "_read_browser_config", lambda: config)
     monkeypatch.setattr(
-        tab_routes,
+        tab_pool_admin,
         "_write_browser_config_unlocked",
         lambda payload: written.update(payload),
     )
@@ -57,13 +61,13 @@ def test_tab_pool_config_persists_and_hot_reloads_route_groups(monkeypatch):
             runtime.update(kwargs)
 
     monkeypatch.setattr(
-        tab_routes,
+        tab_pool_admin,
         "get_browser",
         lambda auto_connect=False: SimpleNamespace(tab_pool=_Pool()),
     )
 
-    response = asyncio.run(tab_routes.update_tab_pool_config(
-        tab_routes.TabPoolConfigRequest(
+    response = asyncio.run(tab_pool_admin.update_tab_pool_config(
+        tab_pool_admin.TabPoolConfigRequest(
             allocation_mode="round_robin",
             enabled_route_methods=["domain", "route_group"],
             route_groups=[_group_payload()],
@@ -89,12 +93,12 @@ def test_route_group_chat_forces_configured_preset_and_uses_group_execution(monk
             return [group]
 
     monkeypatch.setattr(
-        tab_routes,
+        tab_runtime,
         "get_browser",
         lambda auto_connect=False: SimpleNamespace(tab_pool=_Pool()),
     )
     monkeypatch.setattr(
-        tab_routes,
+        tab_group_routes,
         "_resolve_strict_domain_preset",
         lambda route_domain, preset_name: {
             "domain": route_domain,
@@ -114,14 +118,14 @@ def test_route_group_chat_forces_configured_preset_and_uses_group_execution(monk
             captured["metadata"] = metadata
             captured["payload"] = payload
 
-    monkeypatch.setattr(tab_routes, "request_manager", _RequestManager())
+    monkeypatch.setattr(tab_runtime, "request_manager", _RequestManager())
 
     async def fake_chat(request, body, ctx, **kwargs):
         captured["body"] = body
         captured["kwargs"] = kwargs
         return {"ok": True}
 
-    monkeypatch.setattr(tab_routes, "_chat_with_route_domain", fake_chat)
+    monkeypatch.setattr(tab_group_routes, "_chat_with_route_domain", fake_chat)
     body = tab_routes.ChatRequest(
         model="web-browser",
         messages=[{"role": "user", "content": "hello"}],
@@ -190,7 +194,7 @@ def test_route_group_models_exposes_current_member_counts(monkeypatch):
             return []
 
     monkeypatch.setattr(
-        tab_routes,
+        tab_runtime,
         "get_browser",
         lambda auto_connect=False: SimpleNamespace(tab_pool=_Pool()),
     )
@@ -229,19 +233,19 @@ def test_route_group_models_exposes_catalog_and_custom_renamed_models(monkeypatc
             return tabs
 
     monkeypatch.setattr(
-        tab_routes,
+        tab_runtime,
         "get_browser",
         lambda auto_connect=False: SimpleNamespace(tab_pool=_Pool()),
     )
     monkeypatch.setattr(
-        tab_routes,
+        tab_group_routes,
         "get_arena_direct_catalog_for_tab",
         lambda config_engine, tab, preset_name=None: {
             "catalog": {"modality": "image", "enabled": True}
         },
     )
     monkeypatch.setattr(
-        tab_routes,
+        tab_group_routes,
         "list_arena_direct_models",
         lambda browser, catalog_config=None: [
             {"arena_model_id": "m1", "name": "gpt-image-2 (medium)", "display_name": "gpt-image-2 (medium)"},

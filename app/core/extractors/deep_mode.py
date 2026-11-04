@@ -6,28 +6,28 @@ v2.2 修复：
 - 支持 DeepSeek ds-markdown 结构
 """
 
-from typing import Any, Optional, Dict, List
+from typing import Any, Dict, List, Optional
 
+from app.core.driver import as_element
 from app.core.extractors.base import BaseExtractor
 from app.core.extractors.image_extractor import image_extractor
-from app.core.driver import as_element
 
 
 class DeepBrowserExtractor(BaseExtractor):
     """深度浏览器内容提取器"""
-    
+
     @classmethod
     def get_id(cls) -> str:
         return "deep_mode_v1"
-    
+
     @classmethod
     def get_name(cls) -> str:
         return "深度模式 (JS注入)"
-    
+
     @classmethod
     def get_description(cls) -> str:
         return "通过 JavaScript 注入深度提取内容，支持 LaTeX、代码块、Shadow DOM"
-    
+
     DEEP_EXTRACT_JS = r"""
     return (function () {
       function normNewline(s){ return (s||'').replace(/\r\n/g,'\n').replace(/\r/g,'\n'); }
@@ -42,7 +42,7 @@ class DeepBrowserExtractor(BaseExtractor):
         }
         return false;
       }
-      
+
       function hasAncestorClass(el, classPattern){
         var p = el;
         while (p) {
@@ -67,11 +67,11 @@ class DeepBrowserExtractor(BaseExtractor):
         // DeepSeek: 代码块横幅区域
         if (cls.indexOf('md-code-block-banner-wrap') >= 0) return true;
         if (cls.indexOf('code-info-button-text') >= 0) return true;
-        
+
         // GPT: 代码块工具栏
         if (cls.indexOf('sticky') >= 0 && el.querySelector && el.querySelector('button')) return true;
         if (cls.indexOf('bg-token-sidebar-surface-primary') >= 0 && el.querySelector && el.querySelector('button')) return true;
-        
+
         // 通用 UI 元素
         if (cls.indexOf('actions-container') >= 0) return true;
         if (cls.indexOf('projected-actions-wrapper') >= 0) return true;
@@ -80,7 +80,7 @@ class DeepBrowserExtractor(BaseExtractor):
         if (cls.indexOf('material-symbols') >= 0) return true;
         if (cls.indexOf('material-icons') >= 0) return true;
         if (cls.indexOf('mat-icon') >= 0) return true;
-        
+
         // Gemini: 代码块按钮区
         if (cls.indexOf('buttons') >= 0 && el.closest && el.closest('code-block')) return true;
 
@@ -91,7 +91,7 @@ class DeepBrowserExtractor(BaseExtractor):
       }
 
       // ========== LaTeX 提取 ==========
-      
+
       function extractKatexAnnotation(el){
         try {
           var ann = el.querySelector && el.querySelector('annotation[encoding="application/x-tex"]');
@@ -99,7 +99,7 @@ class DeepBrowserExtractor(BaseExtractor):
         } catch(e) {}
         return '';
       }
-      
+
       function extractDataMath(el){
         try {
           var dm = el.getAttribute && el.getAttribute('data-math');
@@ -109,7 +109,7 @@ class DeepBrowserExtractor(BaseExtractor):
       }
 
       // ========== 代码块提取 ==========
-      
+
       function extractDeepSeekCodeBlock(el){
         var lang = '';
         var code = '';
@@ -121,7 +121,7 @@ class DeepBrowserExtractor(BaseExtractor):
         } catch(e) {}
         return { lang: lang, code: code };
       }
-      
+
       function extractGeminiCodeBlock(el){
         var lang = '';
         var code = '';
@@ -133,7 +133,7 @@ class DeepBrowserExtractor(BaseExtractor):
         } catch(e) {}
         return { lang: lang, code: code };
       }
-      
+
       function extractGPTCodeBlock(el){
         var lang = '';
         var code = '';
@@ -158,7 +158,7 @@ class DeepBrowserExtractor(BaseExtractor):
         } catch(e) {}
         return { lang: lang, code: code };
       }
-      
+
       function extractMsCodeBlock(el){
         var best = '';
         try {
@@ -180,7 +180,7 @@ class DeepBrowserExtractor(BaseExtractor):
       }
 
       // ========== 主遍历逻辑 ==========
-      
+
       function walk(node, out){
         if (!node) return;
 
@@ -217,7 +217,7 @@ class DeepBrowserExtractor(BaseExtractor):
           }
           return;
         }
-        
+
         // ===== Gemini 代码块 =====
         if (tag === 'code-block') {
           var gm = extractGeminiCodeBlock(el);
@@ -228,7 +228,7 @@ class DeepBrowserExtractor(BaseExtractor):
           }
           return;
         }
-        
+
         // ===== GPT 代码块 =====
         if (tag === 'pre' && el.querySelector && el.querySelector('code[class*="language-"]')) {
           var gpt = extractGPTCodeBlock(el);
@@ -239,7 +239,7 @@ class DeepBrowserExtractor(BaseExtractor):
           }
           return;
         }
-        
+
         // ===== ms-katex (LaTeX) =====
         if (tag === 'ms-katex') {
           var tex = extractKatexAnnotation(el);
@@ -249,7 +249,7 @@ class DeepBrowserExtractor(BaseExtractor):
           }
           return;
         }
-        
+
         // ===== Gemini LaTeX (span[data-math]) =====
         var dataMath = extractDataMath(el);
         if (dataMath) {
@@ -298,7 +298,7 @@ class DeepBrowserExtractor(BaseExtractor):
           out.push('\n');
           return;
         }
-        
+
         // ===== Markdown 加粗 strong/b =====
         if (tag === 'strong' || tag === 'b') {
           out.push('**');
@@ -307,7 +307,7 @@ class DeepBrowserExtractor(BaseExtractor):
           out.push('**');
           return;
         }
-        
+
         // ===== Markdown 斜体 em/i =====
         if (tag === 'em' || tag === 'i') {
           out.push('*');
@@ -316,7 +316,7 @@ class DeepBrowserExtractor(BaseExtractor):
           out.push('*');
           return;
         }
-        
+
         // ===== Markdown 水平线 hr =====
         if (tag === 'hr') {
           out.push('\n---\n');
@@ -351,7 +351,7 @@ class DeepBrowserExtractor(BaseExtractor):
       }
     }).call(this);
     """
-    
+
     # 注意：移除了 'css:[class*="markdown"]' 这种容易误匹配的选择器
     CONTENT_CHILD_SELECTORS = [
         'css:.markdown-body',      # GitHub style
@@ -368,40 +368,40 @@ class DeepBrowserExtractor(BaseExtractor):
     def find_content_node(self, element) -> Any:
         """
         定位内容子节点
-        
+
         v2.2 修复：正确识别容器元素，不再误匹配段落
         """
         if not element:
             return element
-        
+
         # ===== 关键修复：检查元素本身是否已经是目标容器 =====
         try:
             ele_class = element.attr('class') or ""
             ele_tag = element.tag.lower() if hasattr(element, 'tag') else ""
-            
+
             # 已知的内容容器类名（直接返回，不再向下查找）
             container_patterns = [
                 'ds-markdown',      # DeepSeek
-                'markdown-body',    # GitHub style  
+                'markdown-body',    # GitHub style
                 'prose',            # Tailwind
                 'message-content',  # 通用
                 'response-content', # 通用
             ]
-            
+
             for pattern in container_patterns:
                 if pattern in ele_class:
                     # 确保不是段落子元素
                     if 'paragraph' not in ele_class and 'html' not in ele_class:
                         return element
-            
+
             # 如果是 div/article 且类名包含 markdown/prose，直接返回
             if ele_tag in ('div', 'article', 'section'):
                 if ('markdown' in ele_class or 'prose' in ele_class) and 'paragraph' not in ele_class:
                     return element
-                    
+
         except Exception:
             pass
-        
+
         # ===== 向下查找（只在必要时执行）=====
         try:
             children = as_element(element).find_all(self.CONTENT_CHILD_SELECTOR_COMBINED, timeout=0.08)
@@ -429,16 +429,16 @@ class DeepBrowserExtractor(BaseExtractor):
         """从元素中提取纯文本"""
         if not element:
             return ""
-        
+
         target_ele = self.find_content_node(element)
-        
+
         try:
             text = as_element(target_ele).run_js(self.DEEP_EXTRACT_JS)
             if text and str(text).strip():
                 return str(text).replace('\r\n', '\n').replace('\r', '\n')
         except Exception:
             pass
-        
+
         try:
             t = target_ele.text if hasattr(target_ele, 'text') else ""
             return (t or "").replace('\r\n', '\n').replace('\r', '\n')
@@ -460,13 +460,13 @@ class DeepBrowserExtractor(BaseExtractor):
                     pass
 
             tag = element.tag if hasattr(element, 'tag') else 'unknown'
-            
+
             cls = ""
             try:
                 cls = element.attr('class') or ""
             except Exception:
                 pass
-            
+
             classes = cls.split()[:3]
             class_part = f"|cls={'.'.join(classes)}" if classes else ""
 
@@ -494,19 +494,19 @@ class DeepBrowserExtractor(BaseExtractor):
     ) -> List[Dict]:
         """
         从元素中提取图片（Phase A 新增）
-        
+
         Args:
             element: 页面元素对象
             config: 图片提取配置（ImageExtractionConfig）
             container_selector_fallback: 容器选择器回退值
-        
+
         Returns:
             图片数据列表，每项符合 ImageData 格式
         """
         if not element:
             return []
-        
-        
+
+
         return image_extractor.extract(
             element,
             config=config,

@@ -1,20 +1,21 @@
 from __future__ import annotations
 
-import start
+import os
 
 from app.core.browser.media import BrowserMediaMixin
+from app.runtime.bootstrap import apply_proxy_environment, normalize_python_proxy_url
 
 
 def test_normalize_python_proxy_url_uses_remote_dns_for_socks5() -> None:
     assert (
-        start._normalize_python_proxy_url("socks5://127.0.0.1:1080")
+        normalize_python_proxy_url("socks5://127.0.0.1:1080")
         == "socks5h://127.0.0.1:1080"
     )
     assert (
-        start._normalize_python_proxy_url("127.0.0.1:7897")
+        normalize_python_proxy_url("127.0.0.1:7897")
         == "http://127.0.0.1:7897"
     )
-    assert start._normalize_python_proxy_url("unsupported://127.0.0.1:1") == ""
+    assert normalize_python_proxy_url("unsupported://127.0.0.1:1") == ""
 
 
 def test_service_proxy_config_overrides_http_env_and_merges_bypass(monkeypatch) -> None:
@@ -25,20 +26,20 @@ def test_service_proxy_config_overrides_http_env_and_merges_bypass(monkeypatch) 
     monkeypatch.setenv("HTTPS_PROXY", "http://stale.example:8080")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,.internal")
 
-    env = start._build_service_env()
+    apply_proxy_environment()
 
-    assert env["HTTP_PROXY"] == "socks5h://127.0.0.1:1080"
-    assert env["HTTPS_PROXY"] == "socks5h://127.0.0.1:1080"
-    assert env["NO_PROXY"] == "127.0.0.1,.internal,localhost,::1"
+    assert os.environ["HTTP_PROXY"] == "socks5h://127.0.0.1:1080"
+    assert os.environ["HTTPS_PROXY"] == "socks5h://127.0.0.1:1080"
+    assert os.environ["NO_PROXY"] == "127.0.0.1,.internal,localhost,::1"
 
 
 def test_service_proxy_config_preserves_manual_proxy_when_feature_disabled(monkeypatch) -> None:
     monkeypatch.setenv("PROXY_ENABLED", "false")
     monkeypatch.setenv("HTTP_PROXY", "http://manual.example:8080")
 
-    env = start._build_service_env()
+    apply_proxy_environment()
 
-    assert env["HTTP_PROXY"] == "http://manual.example:8080"
+    assert os.environ["HTTP_PROXY"] == "http://manual.example:8080"
 
 
 class _ScreenshotElement:

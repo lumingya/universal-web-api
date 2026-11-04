@@ -15,15 +15,14 @@ from typing import Any, Dict, List, Optional
 from jsonschema.validators import validator_for
 
 from app.services.tool_calling_common import (
-    _PREFERRED_XML_ARG_TAG,
     _PREFERRED_XML_CALL_TAG,
     _PREFERRED_XML_WRAPPER_TAG,
+    _contains_unicode_surrogate,
     _describe_tool_choice,
     _format_tool_result_message,
     _get_max_tool_argument_chars,
     _get_max_tool_argument_depth,
     _get_max_tool_argument_nodes,
-    _contains_unicode_surrogate,
     _json_dumps_safe,
     _serialize_content,
     logger,
@@ -33,6 +32,7 @@ from app.services.tool_calling_parse import (
     _decode_tool_arguments,
 )
 from app.services.tool_calling_prompts import _generate_tool_few_shot_examples
+
 
 def _get_tool_validation_retry_limit() -> int:
     raw_value = str(os.getenv("TOOL_CALLING_INTERNAL_RETRY_MAX", "2") or "2").strip()

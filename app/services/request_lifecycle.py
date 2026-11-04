@@ -3,17 +3,17 @@ Helpers for request execution lifetime, worker cleanup, and tab retirement.
 """
 
 import asyncio
-import anyio
-from contextlib import contextmanager
 import os
 import queue
 import threading
 import time
+from contextlib import contextmanager
 from typing import Any, Callable, Dict, Optional
+
+import anyio
 
 from app.core.config import BrowserConstants, _request_context, get_logger
 from app.services.request_manager import RequestContext, RequestStatus, request_manager
-
 
 logger = get_logger("REQUEST.LIFECYCLE")
 

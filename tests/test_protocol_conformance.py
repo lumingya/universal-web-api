@@ -2,7 +2,7 @@
 
 浏览器层换成固定输出的假实现，请求经 httpx.ASGITransport 直接进入 main.app（不监听端口、不启动浏览器）。
 验证的是 SDK 眼中的协议形状：非流式/流式响应能被官方 SDK 正确解析，错误码映射到 SDK 的异常类型。
-没有安装 openai / anthropic 时自动跳过（二者在 requirements-dev.txt 中）。
+没有安装 openai / anthropic 时自动跳过（二者在 pyproject.toml 的 dev 依赖组中）。
 """
 
 from __future__ import annotations
@@ -40,13 +40,14 @@ class _FakeBrowser:
 @pytest.fixture
 def app_with_fake_browser(monkeypatch):
     import main
-    from app.api import chat, tab_routes
+    from app.api import chat
+    from app.api.openai import runtime as tab_runtime
 
     for name in ("AUTH_ENABLED", "AUTH_TOKEN"):
         monkeypatch.delenv(name, raising=False)
     browser = _FakeBrowser()
     monkeypatch.setattr(chat, "get_browser", lambda **kwargs: browser)
-    monkeypatch.setattr(tab_routes, "get_browser", lambda **kwargs: browser)
+    monkeypatch.setattr(tab_runtime, "get_browser", lambda **kwargs: browser)
     return main.app, browser
 
 

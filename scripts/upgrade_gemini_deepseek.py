@@ -4,6 +4,7 @@ Non-workflow settings are retained from the normal DeepSeek preset, not experime
 The before snapshot in docs/migrations is importable using the existing site importer.
 """
 from __future__ import annotations
+
 import copy
 import json
 import re

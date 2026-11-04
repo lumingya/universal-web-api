@@ -17,9 +17,8 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 from urllib.parse import urlparse
 
 from app.core.config import logger
-from app.utils.site_url import extract_remote_site_domain, route_domain_matches
 from app.core.driver import driver_for_tab
-
+from app.utils.site_url import route_domain_matches
 
 ARENA_DIRECT_DEFAULT_ENTRY_URL = "https://arena.ai/text/direct"
 ARENA_DIRECT_UNEXPECTED_BATTLE_REDIRECT = "arena_direct_unexpected_battle_redirect"

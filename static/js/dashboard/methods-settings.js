@@ -116,7 +116,7 @@
                     }).join(', ');
 
                     this.notify(
-                        '环境配置已保存。服务会自动重启，但以下启动型配置要完全生效，请关闭当前浏览器和脚本后重新运行 start.bat：' + launcherLabels,
+                        '环境配置已保存。服务会自动重启，但以下启动型配置要完全生效，请关闭当前浏览器和脚本后重新运行 uv run python main.py：' + launcherLabels,
                         'warning'
                     );
                 } else if (scheduledRestartKeys.length > 0) {

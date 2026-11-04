@@ -1,20 +1,20 @@
 """Browser regression for staged workflow, typed forms and multi-case editing.
 Synthetic page only; preview uses the actual Python compiler without web actions.
 """
-import copy
 import json
 import re
 from pathlib import Path
+
 import pytest
 
 pytest.importorskip("playwright.sync_api")
-from playwright.sync_api import expect  # noqa: E402
+from playwright.sync_api import expect
 
-from tests._playwright import launch_chromium, sync_playwright  # noqa: E402
+from tests._playwright import launch_chromium, sync_playwright
 
 pytestmark = pytest.mark.browser
-from app.core.workflow.preview import preview_workflow
 from app.core.workflow.flow_runtime import validate_workflow
+from app.core.workflow.preview import preview_workflow
 
 ROOT=Path(__file__).resolve().parents[1]
 FLOW=[
@@ -159,7 +159,7 @@ def test_vertical_alternatives_never_split_into_narrow_columns(page,width):
 
 
 def test_switch_page_markers_use_exact_case_path_and_drag_without_other_mutation(page):
- from test_workflow_page_guide import HTML, bundle, drag, center
+ from test_workflow_page_guide import HTML, bundle, center, drag
  page.route('**/*',lambda route:route.fulfill(content_type='text/html',body=HTML))
  page.goto('https://example.com/workflow-demo')
  config={'selectors':{},'workflow':[{'action':'SWITCH','value':{'cases':[{'label':'A','condition':{'left':1,'op':'eq','right':1},'steps':[{'action':'CLICK','selector':'#old'}]},{'label':'B','condition':{'left':2,'op':'eq','right':2},'steps':[{'action':'CLICK','selector':'#old','custom':'preserve'}]}],'default':[]}}]}
@@ -259,7 +259,7 @@ def test_import_export_roundtrip_preserves_all_case_fields(page,tmp_path):
 
 
 def test_page_guide_shows_note_title_and_body_not_raw_json(page):
- from test_workflow_page_guide import HTML,bundle
+ from test_workflow_page_guide import HTML, bundle
  page.route('**/*',lambda route:route.fulfill(content_type='text/html',body=HTML))
  page.goto('https://example.com/workflow-demo')
  page.evaluate('(config)=>{window.__WORKFLOW_EDITOR_CONFIG__=config;window.__WORKFLOW_EDITOR_TARGET_DOMAIN__="example.com";}',{'workflow':[FLOW[0]],'selectors':{}})

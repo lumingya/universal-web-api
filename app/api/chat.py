@@ -7,57 +7,56 @@ app/api/chat.py - 核心聊天 API
 - 模型列表
 """
 
-import json
+import asyncio
 import codecs
 import contextlib  # 修复(7)：用于 aclosing 确保内部异步生成器及时清理
 import copy
+import json
 import os
+import queue
 import random
 import re
-import time
-import asyncio
-import queue
 import threading
+import time
 import uuid
 from collections import OrderedDict
-from typing import Optional, Any, Dict, List, Callable, AsyncIterator
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
-from fastapi import APIRouter, Request, HTTPException, Header, Depends
-from fastapi.responses import JSONResponse, StreamingResponse as StarletteStreamingResponse
-from app.api.streaming_response import RequestStreamingResponse as StreamingResponse
-from app.core.chat_job import PROTOCOL_OPENAI_RESPONSES, job_for, use_chat_job, with_chat_job
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse as StarletteStreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from app.core.config import _request_context, get_logger, SSEFormatter
-from app.core import get_browser
-from app.services.request_manager import (
-    request_manager, 
-    RequestContext, 
-    RequestStatus, 
-    watch_client_disconnect,
-    cancel_storm_guard,
+from app.api.deps import (
+    verify_dashboard_auth,
+    verify_service_auth,
+    verify_service_token,
 )
-from app.services.request_lifecycle import (
-    TrackedWorkerExecutionCancelled,
-    request_finalization,
-    get_max_request_execute_time_sec,
-    cleanup_worker_thread_after_request,
-    mark_request_hard_timeout,
-    put_worker_queue_item,
-    run_in_request_context,
-    run_tracked_blocking_call,
-    wait_worker_queue_item,
-)
-from app.services.tool_calling import (
-    build_tool_completion_response,
-    complete_tool_calling_roundtrip_async,
-    decode_browser_non_stream_payload,
-    extract_tool_calling_assistant_content,
-    get_tool_calling_allow_media_postprocess,
-    has_tool_calling_request,
-    iter_tool_stream_chunks,
-    normalize_tool_request,
-    summarize_messages_for_debug,
+from app.api.openai_responses_support import (
+    _append_response_input_item,
+    _build_responses_usage,
+    _chat_payload_to_responses_output,
+    _is_genuine_task_cancellation,
+    _new_response_id,
+    _new_response_item_id,
+    _normalize_chat_style_tool_calls,
+    _normalize_response_input_role,
+    _normalize_response_message_content,
+    _normalize_response_tool_choice,
+    _normalize_response_tool_output_content,
+    _normalize_responses_text_format,
+    _normalize_responses_tools,
+    _response_content_part_from_media_item,
+    _response_function_call_item_from_tool_call,
+    _response_function_call_to_tool_call,
+    _response_message_item_from_content,
+    _response_message_item_from_text,
+    _responses_completion_status_from_chat_payload,
+    _responses_error_payload,
+    _responses_principal_from_request,
+    _responses_state_env_bytes,
+    _responses_tool_output_can_follow_openai,
+    _responses_tool_output_fallback_content,
 )
 from app.api.openai_stop import (
     apply_stop_sequences_to_text,
@@ -69,19 +68,61 @@ from app.api.openai_stop import (
     sse_chunk_has_done,
     sse_frame_data_text,
 )
-from app.api.deps import (
-    verify_dashboard_auth,
-    verify_service_auth,
-    verify_service_token,
+from app.api.stream_helpers import (
+    _dedupe_media_items,
+    _extract_assistant_content,
+    _extract_chunk_media_items,
+    _extract_content_part_media_items,
+    _extract_delta_content_text,
+    _extract_media_part_ref,
+    _extract_stream_error_message,
+    _is_absolute_request_timeout_error,
+    _is_single_choice_request,
+    _pack_done,
+    _pack_error,
+    _pack_error_done,
 )
+from app.api.streaming_response import RequestStreamingResponse as StreamingResponse
+from app.core import get_browser
+from app.core.chat_job import PROTOCOL_OPENAI_RESPONSES, job_for, use_chat_job, with_chat_job
+from app.core.config import SSEFormatter, _request_context, get_logger
 from app.services.catalog_routing import catalog_router, select_catalog_tab
 from app.services.error_metadata import (
-    resolve_error_metadata,
     build_error_response,
     is_manual_terminate,
     is_prompt_rejection_code,
+    resolve_error_metadata,
+)
+from app.services.request_lifecycle import (
+    TrackedWorkerExecutionCancelled,
+    cleanup_worker_thread_after_request,
+    get_max_request_execute_time_sec,
+    mark_request_hard_timeout,
+    put_worker_queue_item,
+    request_finalization,
+    run_in_request_context,
+    run_tracked_blocking_call,
+    wait_worker_queue_item,
+)
+from app.services.request_manager import (
+    RequestContext,
+    RequestStatus,
+    cancel_storm_guard,
+    request_manager,
+    watch_client_disconnect,
 )
 from app.services.text_filter import sanitize_response_text
+from app.services.tool_calling import (
+    build_tool_completion_response,
+    complete_tool_calling_roundtrip_async,
+    decode_browser_non_stream_payload,
+    extract_tool_calling_assistant_content,
+    get_tool_calling_allow_media_postprocess,
+    has_tool_calling_request,
+    iter_tool_stream_chunks,
+    normalize_tool_request,
+    summarize_messages_for_debug,
+)
 from app.utils.model_routing import collect_route_domain_models, inspect_model_route
 from app.utils.site_url import route_domain_matches
 
@@ -95,17 +136,6 @@ RESPONSES_STATE_MAX_ENTRIES = 1024
 RESPONSES_STATE_TTL_SEC = 3600.0
 
 
-def _responses_state_env_bytes(name: str, default_mib: float) -> int:
-    raw = os.getenv(name)
-    try:
-        value = float(str(raw).strip()) if raw not in (None, "") else float(default_mib)
-    except (TypeError, ValueError):
-        value = float(default_mib)
-    if value != value or value <= 0:  # NaN / 非正数回落默认
-        value = float(default_mib)
-    return int(value * 1024 * 1024)
-
-
 # B3：Responses 续接历史的字节预算（单位 MiB，可用环境变量覆盖）。
 # 单条超限 → 不存储并留下「过大」墓碑，续接时返回 413 明确提示；总量超限 → 按 LRU 淘汰。
 RESPONSES_STATE_MAX_ENTRY_BYTES = _responses_state_env_bytes("RESPONSES_STATE_MAX_ENTRY_MB", 8)
@@ -117,26 +147,6 @@ _responses_state_lock = threading.RLock()
 # B3：条目 = (stored_at, serialized 或 None(过大墓碑), owner 主体指纹, 字节数)
 _responses_state_by_id: "OrderedDict[str, tuple[float, Optional[str], str, int]]" = OrderedDict()
 _responses_state_total_bytes = 0
-
-
-def _responses_principal_from_request(request: Any) -> str:
-    """B3：续接状态按调用主体隔离——取请求携带的 API 令牌（Bearer / X-API-Key）的 SHA-256 指纹。
-
-    未携带令牌（认证关闭的本机场景）时为空串，所有匿名调用共享一个命名空间，与旧行为一致。
-    """
-    import hashlib
-
-    headers = getattr(request, "headers", None)
-    if headers is None:
-        return ""
-    raw = str(headers.get("authorization") or "").strip()
-    if raw.lower().startswith("bearer "):
-        raw = raw[7:].strip()
-    if not raw:
-        raw = str(headers.get("x-api-key") or "").strip()
-    if not raw:
-        return ""
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 class _ToolCallingExecutionCancelled(Exception):
@@ -185,14 +195,17 @@ def _request_cancelled_response() -> JSONResponse:
 # 兼容性别名与适配函数（维持既有测试用例与下游依赖契约）
 # =========================================================================
 from app.services.error_metadata import (
-    _PROMPT_REJECTION_CODES as _ARENA_PROMPT_REJECTION_REASONS,
     _KNOWN_NON_RETRYABLE_CODES as _ARENA_NON_RETRYABLE_REASONS,
-    ARENA_PROMPT_REJECTED_CODE,
+)
+from app.services.error_metadata import (
+    _PROMPT_REJECTION_CODES as _ARENA_PROMPT_REJECTION_REASONS,
+)
+from app.services.error_metadata import (
     ARENA_NON_RETRYABLE_CODES,
     ARENA_PAGE_ERROR,
+    ARENA_PROMPT_REJECTED_CODE,
     ARENA_SEND_NO_TARGET_AFTER_RETRY,
 )
-
 
 # ================= 向前兼容适配层（供外部测试与兼容调用） =================
 _select_arena_catalog_tab = select_catalog_tab
@@ -250,7 +263,7 @@ def _arena_non_retryable_response(message: str, code: str) -> JSONResponse:
 
 
 # 动态目录函数符号导出（供 monkeypatch / 兼容测试使用）
-from app.services.arena_direct_models import (  # noqa: E402
+from app.services.arena_direct_models import (
     build_openai_model_entries,
     get_arena_direct_catalog_for_tab,
     get_arena_direct_model_public_id,
@@ -258,25 +271,6 @@ from app.services.arena_direct_models import (  # noqa: E402
     match_arena_direct_model,
     normalize_model_catalog_config,
 )
-
-
-def _is_genuine_task_cancellation() -> bool:
-    """修复(2)：区分「当前协程真的被外部 cancel」与「内部路径把取消转换成的 CancelledError」。
-
-    cancelling() > 0 说明本任务确实收到了外部取消（如服务关闭、连接层取消），
-    此时必须继续向上抛；否则视为内部转换信号，可安全地做结构化收尾。
-    """
-    task = asyncio.current_task()
-    if task is None:
-        return True  # 保守：无法判断时按真实取消处理
-    try:
-        return task.cancelling() > 0
-    except AttributeError:
-        return True
-
-
-def _is_absolute_request_timeout_error(error: Any) -> bool:
-    return str(error or "").strip() == "absolute_request_timeout"
 
 
 def _format_tool_calling_error(error: Any) -> tuple[str, str]:
@@ -320,131 +314,9 @@ def _put_worker_queue_item(
     )
 
 
-def _extract_stream_error_message(chunk: Any) -> str:
-    return extract_openai_sse_error_message(chunk)
-
-
-def _extract_chunk_media_items(data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    media_items: List[Dict[str, Any]] = []
-
-    top_level_media = data.get("media")
-    if isinstance(top_level_media, list):
-        media_items.extend(item for item in top_level_media if isinstance(item, dict))
-
-    choices = data.get("choices")
-    if isinstance(choices, list) and choices:
-        delta = choices[0].get("delta", {})
-        if isinstance(delta, dict):
-            delta_media = delta.get("media")
-            if isinstance(delta_media, list):
-                media_items.extend(item for item in delta_media if isinstance(item, dict))
-            media_items.extend(_extract_content_part_media_items(delta.get("content")))
-
-    return media_items
-
-
-def _extract_media_part_ref(value: Any) -> str:
-    if isinstance(value, dict):
-        return str(value.get("url") or value.get("data_uri") or "").strip()
-    return str(value or "").strip()
-
-
-def _extract_content_part_media_items(content: Any) -> List[Dict[str, Any]]:
-    if isinstance(content, dict):
-        content = [content]
-    if not isinstance(content, list):
-        return []
-
-    media_items: List[Dict[str, Any]] = []
-    for part in content:
-        if not isinstance(part, dict):
-            continue
-
-        part_type = str(part.get("type") or "").strip().lower()
-        ref = ""
-        media_type = ""
-        if part_type in {"image_url", "input_image", "output_image"}:
-            ref = _extract_media_part_ref(
-                part.get("image_url") or part.get("url") or part.get("data_uri")
-            )
-            media_type = "image"
-        elif part_type in {"audio_url", "input_audio", "output_audio"}:
-            ref = _extract_media_part_ref(
-                part.get("audio_url") or part.get("input_audio") or part.get("url")
-            )
-            media_type = "audio"
-        elif part_type in {"video_url", "input_video", "output_video"}:
-            ref = _extract_media_part_ref(
-                part.get("video_url") or part.get("input_video") or part.get("url")
-            )
-            media_type = "video"
-
-        if not ref:
-            continue
-
-        media_item: Dict[str, Any] = {"media_type": media_type}
-        if ref.startswith("data:"):
-            media_item["data_uri"] = ref
-        else:
-            media_item["url"] = ref
-
-        detail = str(part.get("detail") or "").strip()
-        if detail:
-            media_item["detail"] = detail
-        mime = str(part.get("mime_type") or part.get("mime") or "").strip()
-        if mime:
-            media_item["mime"] = mime
-        label = str(part.get("label") or "").strip()
-        if label:
-            media_item["label"] = label
-        media_items.append(media_item)
-
-    return media_items
-
-
-def _extract_delta_content_text(content: Any) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: List[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-                continue
-            if not isinstance(item, dict):
-                continue
-            item_type = str(item.get("type") or "").strip().lower()
-            if item_type in {"text", "input_text", "output_text"}:
-                parts.append(str(item.get("text") or ""))
-        return "".join(parts)
-    if isinstance(content, dict):
-        item_type = str(content.get("type") or "").strip().lower()
-        if item_type in {"text", "input_text", "output_text"}:
-            return str(content.get("text") or "")
-    return ""
-
-
-def _dedupe_media_items(media_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    deduped: List[Dict[str, Any]] = []
-    seen = set()
-
-    for item in media_items or []:
-        media_type = str(item.get("media_type") or "").strip().lower()
-        ref = str(item.get("url") or item.get("data_uri") or "").strip()
-        key = (media_type, ref)
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-
-    return deduped
-
-
 def _validate_image_inputs(messages: list) -> None:
     """Legacy name: validate all recognized attachment sources, never partial success."""
-    from app.utils.attachments import normalize_messages, AttachmentError
+    from app.utils.attachments import AttachmentError, normalize_messages
     try:
         normalize_messages(messages)
     except AttachmentError as exc:
@@ -453,6 +325,7 @@ def _validate_image_inputs(messages: list) -> None:
 
 # ================= 请求模型 =================
 
+
 class ChatRequest(BaseModel):
     """聊天请求模型"""
     workflow_variables: Dict[str, Any] = Field(default_factory=dict)
@@ -460,7 +333,7 @@ class ChatRequest(BaseModel):
     @field_validator('workflow_variables')
     @classmethod
     def validate_workflow_variables(cls, value):
-        from app.core.workflow.flow_runtime import validate_inputs, FlowValidationError
+        from app.core.workflow.flow_runtime import FlowValidationError, validate_inputs
         try:
             return validate_inputs(value)
         except FlowValidationError as exc:
@@ -499,7 +372,7 @@ class ResponsesRequest(BaseModel):
     @field_validator('workflow_variables')
     @classmethod
     def validate_workflow_variables(cls, value):
-        from app.core.workflow.flow_runtime import validate_inputs, FlowValidationError
+        from app.core.workflow.flow_runtime import FlowValidationError, validate_inputs
         try:
             return validate_inputs(value)
         except FlowValidationError as exc:
@@ -528,21 +401,6 @@ class ResponsesRequest(BaseModel):
     model_config = {
         "extra": "allow",
     }
-
-
-def _is_single_choice_request(body: ChatRequest) -> bool:
-    try:
-        return int(getattr(body, "n", 1) or 1) <= 1
-    except (TypeError, ValueError):
-        return True
-
-
-def _new_response_id() -> str:
-    return f"resp_{int(time.time() * 1000)}_{uuid.uuid4().hex[:10]}"
-
-
-def _new_response_item_id(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
 def _pop_responses_state_locked(response_id: str) -> None:
@@ -668,409 +526,6 @@ def _format_rfc3339_timestamp(timestamp: Optional[float] = None) -> str:
     )
 
 
-def _normalize_response_tool_choice(value: Any) -> Any:
-    if isinstance(value, dict):
-        value_type = str(value.get("type") or "").strip().lower()
-        if value_type == "function":
-            function_block = value.get("function") if isinstance(value.get("function"), dict) else {}
-            name = str(function_block.get("name") or value.get("name") or "").strip()
-            if name:
-                return {
-                    "type": "function",
-                    "function": {
-                        "name": name,
-                    },
-                }
-    return value
-
-
-def _normalize_responses_tools(tools: Any) -> Optional[List[Dict[str, Any]]]:
-    if not isinstance(tools, list):
-        return None
-
-    normalized: List[Dict[str, Any]] = []
-    for item in tools:
-        if not isinstance(item, dict):
-            continue
-        item_type = str(item.get("type") or "").strip().lower()
-        if item_type != "function":
-            continue
-
-        if isinstance(item.get("function"), dict):
-            fn = item["function"]
-            name = str(fn.get("name") or "").strip()
-            if not name:
-                continue
-            normalized.append(
-                {
-                    "type": "function",
-                    "function": {
-                        "name": name,
-                        "description": str(fn.get("description") or "").strip(),
-                        "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
-                    },
-                }
-            )
-            continue
-
-        name = str(item.get("name") or "").strip()
-        if not name:
-            continue
-        normalized.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": str(item.get("description") or "").strip(),
-                    "parameters": item.get("parameters", {"type": "object", "properties": {}}),
-                },
-            }
-        )
-
-    return normalized or None
-
-
-def _normalize_responses_text_format(text_config: Any) -> Optional[Dict[str, Any]]:
-    if not isinstance(text_config, dict):
-        return None
-
-    format_config = text_config.get("format")
-    if not isinstance(format_config, dict):
-        return None
-
-    format_type = str(format_config.get("type") or "text").strip().lower()
-    if format_type == "json_schema":
-        if isinstance(format_config.get("json_schema"), dict):
-            payload = format_config["json_schema"]
-        else:
-            payload = {}
-            if "name" in format_config:
-                payload["name"] = format_config.get("name")
-            if "schema" in format_config:
-                payload["schema"] = format_config.get("schema")
-            if "strict" in format_config:
-                payload["strict"] = format_config.get("strict")
-        return {
-            "type": "json_schema",
-            "json_schema": payload,
-        }
-
-    if format_type == "json_object":
-        return {"type": "json_object"}
-
-    return {"type": format_type}
-
-
-def _normalize_response_message_content(content: Any) -> Any:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, dict):
-        return _normalize_response_message_content([content])
-    if not isinstance(content, list):
-        return str(content)
-
-    normalized_parts: List[Dict[str, Any]] = []
-    leading_text_parts: List[str] = []
-
-    for part in content:
-        if isinstance(part, str):
-            if part:
-                leading_text_parts.append(part)
-            continue
-        if not isinstance(part, dict):
-            text = str(part or "")
-            if text:
-                leading_text_parts.append(text)
-            continue
-
-        from app.utils.attachments import normalize_attachment_part, AttachmentError
-        try:
-            attachment = normalize_attachment_part(part)
-        except AttachmentError as exc:
-            raise HTTPException(status_code=400, detail=exc.detail()) from exc
-        if attachment is not None:
-            normalized_parts.append(attachment)
-            continue
-
-        part_type = str(part.get("type") or "").strip().lower()
-        if part_type in {"input_text", "output_text", "text"}:
-            text = str(part.get("text") or "")
-            if not text:
-                continue
-            if normalized_parts:
-                normalized_parts.append({"type": "text", "text": text})
-            else:
-                leading_text_parts.append(text)
-            continue
-
-        if part_type in {"input_image", "image_url", "output_image"}:
-            image_value = part.get("image_url")
-            if isinstance(image_value, dict):
-                image_url = str(image_value.get("url") or "").strip()
-                detail = str(image_value.get("detail") or "").strip()
-            else:
-                image_url = str(image_value or part.get("url") or "").strip()
-                detail = str(part.get("detail") or "").strip()
-
-            if not image_url:
-                continue
-
-            image_payload: Dict[str, Any] = {"url": image_url}
-            if detail:
-                image_payload["detail"] = detail
-
-            normalized_parts.append(
-                {
-                    "type": "image_url",
-                    "image_url": image_payload,
-                }
-            )
-            continue
-
-        if part_type in {"output_audio", "output_video"}:
-            if part_type == "output_audio":
-                media_value = part.get("audio_url") or part.get("input_audio") or part.get("url") or ""
-                media_label = "audio"
-            else:
-                media_value = part.get("video_url") or part.get("url") or ""
-                media_label = "video"
-            media_url = str(
-                media_value.get("url") if isinstance(media_value, dict) else media_value
-            ).strip()
-            if media_url:
-                media_text = f"[{media_label}]({media_url})"
-                if normalized_parts:
-                    normalized_parts.append({"type": "text", "text": media_text})
-                else:
-                    leading_text_parts.append(media_text)
-            continue
-
-        text_fallback_value = part.get("text")
-        if text_fallback_value is None:
-            text_fallback_value = part.get("output")
-        if text_fallback_value is None:
-            text_fallback_value = part.get("content")
-        if text_fallback_value is None:
-            text_fallback = json.dumps(part, ensure_ascii=False)
-        elif isinstance(text_fallback_value, (dict, list)):
-            text_fallback = json.dumps(text_fallback_value, ensure_ascii=False)
-        else:
-            text_fallback = str(text_fallback_value).strip()
-        if text_fallback:
-            if normalized_parts:
-                normalized_parts.append({"type": "text", "text": text_fallback})
-            else:
-                leading_text_parts.append(text_fallback)
-
-    joined_text = "\n".join(part for part in leading_text_parts if part)
-
-    if not normalized_parts:
-        return joined_text
-
-    if joined_text:
-        normalized_parts.insert(
-            0,
-            {
-                "type": "text",
-                "text": joined_text,
-            },
-        )
-    return normalized_parts
-
-
-def _normalize_response_input_role(role: Any) -> str:
-    normalized_role = str(role or "user").strip().lower()
-    if normalized_role == "developer":
-        return "system"
-    if normalized_role in {"system", "user", "assistant", "tool"}:
-        return normalized_role
-    return "user"
-
-
-def _normalize_response_tool_output_content(content: Any) -> Any:
-    normalized = _normalize_response_message_content(content)
-    if normalized in ("", None):
-        return ""
-    return normalized
-
-
-def _responses_tool_output_can_follow_openai(
-    messages: List[Dict[str, Any]],
-    tool_call_id: str,
-) -> bool:
-    if not tool_call_id:
-        return False
-
-    for message in reversed(messages):
-        if not isinstance(message, dict):
-            continue
-        role = str(message.get("role") or "").strip().lower()
-        if role == "tool":
-            continue
-        if role != "assistant":
-            return False
-        tool_calls = message.get("tool_calls")
-        if not isinstance(tool_calls, list) or not tool_calls:
-            return False
-        return any(
-            isinstance(item, dict)
-            and str(item.get("id") or "").strip() == tool_call_id
-            for item in tool_calls
-        )
-
-    return False
-
-
-def _responses_tool_output_fallback_content(
-    item: Dict[str, Any],
-    output: Any,
-) -> Any:
-    call_id = str(item.get("call_id") or item.get("tool_call_id") or item.get("id") or "").strip()
-    name = str(item.get("name") or "").strip()
-    header = "[Function Call Output"
-    if name:
-        header += f": {name}"
-    if call_id:
-        header += f" ({call_id})"
-    header += "]"
-
-    if isinstance(output, list):
-        return [{"type": "text", "text": f"{header}\n"}] + output
-    if isinstance(output, dict):
-        output = json.dumps(output, ensure_ascii=False)
-    return f"{header}\n{str(output or '')}".strip()
-
-
-def _response_function_call_to_tool_call(item: Dict[str, Any]) -> Dict[str, Any]:
-    arguments = item.get("arguments")
-    if not isinstance(arguments, str):
-        arguments = json.dumps(arguments if arguments is not None else {}, ensure_ascii=False)
-    return {
-        "id": str(item.get("call_id") or item.get("id") or _new_response_item_id("call")).strip(),
-        "type": "function",
-        "function": {
-            "name": str(item.get("name") or "").strip(),
-            "arguments": arguments,
-        },
-    }
-
-
-def _normalize_chat_style_tool_calls(tool_calls: Any) -> Optional[List[Any]]:
-    if not isinstance(tool_calls, list):
-        return None
-
-    normalized: List[Any] = []
-    for item in tool_calls:
-        if not isinstance(item, dict):
-            normalized.append(item)
-            continue
-
-        next_item = dict(item)
-        function_data = next_item.get("function")
-        if isinstance(function_data, dict):
-            next_function = dict(function_data)
-            arguments = next_function.get("arguments")
-            if not isinstance(arguments, str):
-                next_function["arguments"] = json.dumps(
-                    arguments if arguments is not None else {},
-                    ensure_ascii=False,
-                )
-            next_item["function"] = next_function
-        normalized.append(next_item)
-
-    return normalized
-
-
-def _append_response_input_item(messages: List[Dict[str, Any]], item: Any) -> None:
-    if item is None:
-        return
-
-    if isinstance(item, str):
-        if item:
-            messages.append({"role": "user", "content": item})
-        return
-
-    if not isinstance(item, dict):
-        text = str(item)
-        if text:
-            messages.append({"role": "user", "content": text})
-        return
-
-    role = str(item.get("role") or "").strip().lower()
-    item_type = str(item.get("type") or "").strip().lower()
-
-    if role or item_type == "message":
-        normalized_role = _normalize_response_input_role(role)
-        content = item.get("content")
-        if content is None and "text" in item:
-            content = item.get("text")
-        message_payload: Dict[str, Any] = {
-            "role": normalized_role,
-            "content": _normalize_response_message_content(content),
-        }
-        if normalized_role == "assistant":
-            tool_calls = _normalize_chat_style_tool_calls(item.get("tool_calls"))
-            if tool_calls is not None:
-                message_payload["tool_calls"] = tool_calls
-        if normalized_role == "tool":
-            tool_call_id = str(
-                item.get("tool_call_id") or item.get("call_id") or item.get("id") or ""
-            ).strip()
-            if tool_call_id:
-                message_payload["tool_call_id"] = tool_call_id
-            name = str(item.get("name") or "").strip()
-            if name:
-                message_payload["name"] = name
-        messages.append(message_payload)
-        return
-
-    if item_type == "function_call":
-        messages.append(
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [_response_function_call_to_tool_call(item)],
-            }
-        )
-        return
-
-    if item_type in {"function_call_output", "tool_result"}:
-        output_source = item.get("output")
-        if output_source is None and "content" in item:
-            output_source = item.get("content")
-        output = _normalize_response_tool_output_content(output_source)
-        tool_call_id = str(
-            item.get("call_id") or item.get("tool_call_id") or item.get("id") or ""
-        ).strip()
-        if _responses_tool_output_can_follow_openai(messages, tool_call_id):
-            tool_message: Dict[str, Any] = {
-                "role": "tool",
-                "tool_call_id": tool_call_id,
-                "content": output,
-            }
-            name = str(item.get("name") or "").strip()
-            if name:
-                tool_message["name"] = name
-            messages.append(tool_message)
-        else:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": _responses_tool_output_fallback_content(item, output),
-                }
-            )
-        return
-
-    content = item.get("content")
-    if content is None and "text" in item:
-        content = item.get("text")
-    normalized_content = _normalize_response_message_content(content)
-    if normalized_content not in ("", [], None):
-        messages.append({"role": "user", "content": normalized_content})
-
-
 def _responses_input_to_messages(body: ResponsesRequest, principal: str = "") -> List[Dict[str, Any]]:
     messages: List[Dict[str, Any]] = []
     instructions = str(body.instructions or "").strip()
@@ -1135,131 +590,6 @@ def _responses_request_to_chat_request(
     )
 
 
-def _response_message_item_from_text(text: str) -> Dict[str, Any]:
-    return {
-        "id": _new_response_item_id("msg"),
-        "type": "message",
-        "status": "completed",
-        "role": "assistant",
-        "content": [
-            {
-                "type": "output_text",
-                "text": str(text or ""),
-                "annotations": [],
-            }
-        ],
-    }
-
-
-def _response_content_part_from_media_item(item: Any, index: int) -> Optional[Dict[str, Any]]:
-    if not isinstance(item, dict):
-        return None
-
-    media_type = str(item.get("media_type") or item.get("type") or "image").strip().lower()
-    ref = str(item.get("url") or item.get("data_uri") or "").strip()
-    if not ref:
-        return None
-
-    if media_type == "audio":
-        payload: Dict[str, Any] = {"type": "output_audio", "audio_url": ref}
-    elif media_type == "video":
-        payload = {"type": "output_video", "video_url": ref}
-    else:
-        payload = {"type": "output_image", "image_url": ref}
-
-    payload["annotations"] = []
-    payload["index"] = index
-    mime = str(item.get("mime") or "").strip()
-    if mime:
-        payload["mime_type"] = mime
-    label = str(item.get("label") or "").strip()
-    if label:
-        payload["label"] = label
-    return payload
-
-
-def _response_message_item_from_content(
-    text: str,
-    media_items: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
-    content: List[Dict[str, Any]] = []
-    if text:
-        content.append(
-            {
-                "type": "output_text",
-                "text": str(text or ""),
-                "annotations": [],
-            }
-        )
-
-    for item in media_items or []:
-        media_part = _response_content_part_from_media_item(item, len(content))
-        if media_part is not None:
-            content.append(media_part)
-
-    if not content:
-        content.append(
-            {
-                "type": "output_text",
-                "text": "",
-                "annotations": [],
-            }
-        )
-
-    return {
-        "id": _new_response_item_id("msg"),
-        "type": "message",
-        "status": "completed",
-        "role": "assistant",
-        "content": content,
-    }
-
-
-def _response_function_call_item_from_tool_call(tool_call: Dict[str, Any]) -> Dict[str, Any]:
-    function_data = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
-    call_id = str(tool_call.get("id") or _new_response_item_id("call")).strip()
-    item_id = (
-        f"fc_{call_id[5:]}" if call_id.startswith("call_") else _new_response_item_id("fc")
-    )
-    arguments = function_data.get("arguments")
-    if not isinstance(arguments, str):
-        arguments = json.dumps(arguments if arguments is not None else {}, ensure_ascii=False)
-    return {
-        "id": item_id,
-        "type": "function_call",
-        "status": "completed",
-        "call_id": call_id,
-        "name": str(function_data.get("name") or "").strip(),
-        "arguments": arguments,
-    }
-
-
-def _chat_payload_to_responses_output(chat_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-    choices = chat_payload.get("choices") if isinstance(chat_payload.get("choices"), list) else []
-    if not choices:
-        return []
-
-    message = choices[0].get("message") if isinstance(choices[0], dict) else {}
-    if not isinstance(message, dict):
-        return []
-
-    output: List[Dict[str, Any]] = []
-    tool_calls = message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []
-    for tool_call in tool_calls:
-        if not isinstance(tool_call, dict):
-            continue
-        output.append(_response_function_call_item_from_tool_call(tool_call))
-
-    content = message.get("content")
-    media_items = message.get("media")
-    if not isinstance(media_items, list):
-        media_items = chat_payload.get("media") if isinstance(chat_payload.get("media"), list) else []
-    if content not in ("", None) or media_items:
-        output.append(_response_message_item_from_content(str(content or ""), media_items))
-
-    return output
-
-
 def _build_in_progress_response_item(item: Dict[str, Any]) -> Dict[str, Any]:
     item_type = str(item.get("type") or "").strip().lower()
     if item_type == "function_call":
@@ -1282,15 +612,6 @@ def _build_in_progress_response_item(item: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     return dict(item)
-
-
-def _build_responses_usage(chat_payload: Dict[str, Any]) -> Dict[str, int]:
-    usage = chat_payload.get("usage") if isinstance(chat_payload.get("usage"), dict) else {}
-    return {
-        "input_tokens": int(usage.get("prompt_tokens") or 0),
-        "output_tokens": int(usage.get("completion_tokens") or 0),
-        "total_tokens": int(usage.get("total_tokens") or 0),
-    }
 
 
 def _build_responses_text_payload(body: ResponsesRequest) -> Dict[str, Any]:
@@ -1374,41 +695,6 @@ def _build_responses_object(
         response_obj["completed_at"] = int(time.time())
 
     return response_obj
-
-
-def _responses_completion_status_from_chat_payload(chat_payload: Dict[str, Any]) -> tuple[str, Optional[Dict[str, Any]], str]:
-    choices = chat_payload.get("choices") if isinstance(chat_payload.get("choices"), list) else []
-    for choice in choices:
-        if not isinstance(choice, dict):
-            continue
-        finish_reason = str(choice.get("finish_reason") or "").strip().lower()
-        if finish_reason == "length":
-            return "incomplete", {"reason": "max_output_tokens"}, "response.incomplete"
-        if finish_reason == "content_filter":
-            return "incomplete", {"reason": "content_filter"}, "response.incomplete"
-    return "completed", None, "response.completed"
-
-
-def _responses_error_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    error = payload.get("error") if isinstance(payload, dict) else None
-    if isinstance(error, dict):
-        error_payload = dict(error)
-        error_payload["message"] = str(error_payload.get("message") or "responses_backing_request_failed")
-        error_payload["type"] = str(error_payload.get("type") or "execution_error")
-        if error_payload.get("code") is None:
-            error_payload["code"] = "responses_backing_request_failed"
-        return error_payload
-    if isinstance(error, str) and error.strip():
-        return {
-            "message": error.strip(),
-            "type": "execution_error",
-            "code": "responses_backing_request_failed",
-        }
-    return {
-        "message": "responses_backing_request_failed",
-        "type": "execution_error",
-        "code": "responses_backing_request_failed",
-    }
 
 
 def _decode_json_response(response: JSONResponse) -> Dict[str, Any]:
@@ -2066,15 +1352,15 @@ def _apply_response_format(messages: list, response_format: dict) -> list:
             hint = hint_template.replace("{schema}", schema_str)
         except Exception:
             hint = hint_template.replace("{schema}", str(schema_content))
-    
+
     import copy
     new_messages = copy.deepcopy(messages)
-    
+
     for i in range(len(new_messages) - 1, -1, -1):
         msg = new_messages[i]
         if msg.get("role") == "user":
             content = msg.get("content", "")
-            
+
             if isinstance(content, str):
                 msg["content"] = content + hint
                 break
@@ -2087,7 +1373,7 @@ def _apply_response_format(messages: list, response_format: dict) -> list:
                 else:
                     content.append({"type": "text", "text": hint})
                 break
-    
+
     return new_messages
 
 
@@ -2187,6 +1473,8 @@ async def verify_auth(
 # ================= 核心聊天 API =================
 
 @router.post("/v1/chat/completions")
+
+
 async def chat_completions(
     request: Request,
     body: ChatRequest,
@@ -2203,7 +1491,7 @@ async def chat_completions(
         f"stream={body.stream}, messages_count={len(body.messages)}"
     )
 
-    from app.utils.attachments import normalize_messages, AttachmentError
+    from app.utils.attachments import AttachmentError, normalize_messages
     try:
         body.messages = normalize_messages(body.messages)
     except AttachmentError as exc:
@@ -2409,6 +1697,8 @@ async def chat_completions(
 
 
 @router.post("/v1/responses")
+
+
 async def create_response(
     request: Request,
     body: ResponsesRequest,
@@ -2519,8 +1809,8 @@ async def _stream_with_lifecycle(
 
                 for chunk in gen:
                     chunk_counter += 1
-                    
-                    
+
+
                     if ctx.should_stop():
                         cancel_reason = str(ctx.cancel_reason or "unknown")
                         if cancel_reason in {"cleanup", "client_disconnected", "coroutine_cancelled"}:
@@ -2629,7 +1919,7 @@ async def _stream_with_lifecycle(
             has_images = '"images"' in chunk if isinstance(chunk, str) else False
             if has_images:
                 logger.info(f"[SEND] 发送包含图片的 chunk 给客户端")
-            
+
             outgoing_chunks = filter_openai_stop_sse_chunk(chunk, stop_state, body.model)
             for outgoing_chunk in outgoing_chunks:
                 emit_chunk, chunk_had_done = _split_sse_done_frame(outgoing_chunk)
@@ -2747,7 +2037,7 @@ async def _stream_with_lifecycle(
         logger.error(f"异常: {e}")
         request_manager.capture_error(ctx, e, code="internal_error")
         ctx.mark_failed(str(getattr(e, "code", None) or e))
-        yield _pack_error(f"执行错误: {str(e)}", "internal_error")
+        yield _pack_error(f"执行错误: {e!s}", "internal_error")
         yield _pack_done()
 
     finally:
@@ -2776,7 +2066,6 @@ async def _stream_with_lifecycle(
                     await disconnect_task
                 except asyncio.CancelledError:
                     pass
-
 
 
 async def _non_stream_with_lifecycle(
@@ -2899,13 +2188,6 @@ def _execute_browser_non_stream_messages(
         from app.services.error_metadata import BrowserExecutionError
         raise BrowserExecutionError(error)
     return data
-
-
-def _extract_assistant_content(response: Dict[str, Any]) -> str:
-    try:
-        return extract_tool_calling_assistant_content(response)
-    except Exception:
-        return ""
 
 
 async def _run_tool_calling_async(
@@ -3162,35 +2444,6 @@ async def _stream_tool_calling_with_lifecycle(
                     pass
 
 
-def _pack_error(
-    message: str,
-    code: str = "error",
-    *,
-    error_type: str = "execution_error",
-    status_code: Optional[int] = None,
-    retryable: Optional[bool] = None,
-    param: Optional[str] = None,
-    extra: Optional[Dict[str, Any]] = None,
-) -> str:
-    return SSEFormatter.pack_error(
-        message=message,
-        error_type=error_type,
-        code=code,
-        status_code=status_code,
-        retryable=retryable,
-        param=param,
-        extra=extra,
-    )
-
-
-def _pack_done() -> str:
-    return "data: [DONE]\n\n"
-
-
-def _pack_error_done(message: str, code: str = "error") -> str:
-    return f"{_pack_error(message, code)}{_pack_done()}"
-
-
 def _collect_model_entries() -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
     seen_model_ids = set()
@@ -3273,6 +2526,8 @@ def _verify_models_auth(
 @router.get("/v1/v1/model")
 @router.get("/v1/models")
 @router.get("/v1/model")
+
+
 async def list_models(
     authorization: Optional[str] = Header(None),
     x_api_key: Optional[str] = Header(None, alias="x-api-key"),
@@ -3288,12 +2543,3 @@ async def list_models(
         "object": "list",
         "data": data,
     }
-
-@router.get("/api/pool/status")
-async def get_pool_status(authenticated: bool = Depends(verify_dashboard_auth)):
-    """获取标签页池状态"""
-    try:
-        browser = get_browser(auto_connect=False)
-        return browser.get_pool_status()
-    except Exception as e:
-        return {"error": str(e), "initialized": False}

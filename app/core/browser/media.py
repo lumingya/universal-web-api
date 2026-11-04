@@ -1,26 +1,19 @@
 # app/core/browser/media.py
 
-import json
-import time
+import base64
+import binascii
 import os
 import shutil
 import subprocess
-import base64
+import time
 import uuid
-import binascii
-from pathlib import Path
+from dataclasses import dataclass, field, replace
 from datetime import datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse, urlsplit
-from typing import Optional, List, Dict, Any, Callable, TYPE_CHECKING
-import requests
 
-from app.core.config import logger, AppConfig, BrowserConstants
-from app.models.schemas import (
-    get_enabled_modalities,
-    get_modality_policy,
-    get_modality_run_policy,
-    is_modality_enabled,
-)
+from app import paths
 from app.core.background_image_downloader import (
     background_image_downloader,
     build_image_download_partition,
@@ -28,22 +21,47 @@ from app.core.background_image_downloader import (
     get_image_download_partition,
     normalize_remote_image_url,
 )
-from app.utils.remote_resource import get_public_remote_resource
+from app.core.config import AppConfig, logger
+from app.core.driver import as_element, driver_for_tab
+from app.core.tab_pool import TabSession
+from app.models.schemas import (
+    get_enabled_modalities,
+    get_modality_policy,
+    get_modality_run_policy,
+    is_modality_enabled,
+)
+from app.utils.image_validation import filter_reference_images
 from app.utils.media_safety import (
-    IMAGE_EXT_BY_MIME,
     AUDIO_EXT_BY_MIME,
+    IMAGE_EXT_BY_MIME,
     VIDEO_EXT_BY_MIME,
     choose_media_extension,
     is_active_content_mime,
     looks_like_active_content,
 )
+from app.utils.remote_resource import get_public_remote_resource
 from app.utils.site_url import extract_remote_site_domain
-from app.utils.image_validation import filter_reference_images
-from app.core.tab_pool import TabSession
-from app.core.driver import as_element, driver_for_tab
 
 if TYPE_CHECKING:
-    from .main import BrowserCore
+    pass
+
+
+@dataclass(frozen=True)
+class _LateMediaScan:
+    """一次 DOM 重扫后的媒体快照。
+
+    `_extract_media_after_stream` 里两段延迟等待（pending 补扫、无信号盲等）
+    每轮循环都要重扫并重算 image/audio/video 三个列表，原先是两份逐字重复
+    的代码。抽出这个不可变快照后，两份循环共用同一个 `_rescan_ready_media`。
+    """
+
+    last_element: Any = None
+    media_items: List[Dict] = field(default_factory=list)
+    ready_media_items: List[Dict] = field(default_factory=list)
+    image_items: List[Dict] = field(default_factory=list)
+    audio_items: List[Dict] = field(default_factory=list)
+    video_items: List[Dict] = field(default_factory=list)
+    container_mode: Optional[str] = None
 
 
 class BrowserMediaMixin:
@@ -296,6 +314,21 @@ class BrowserMediaMixin:
             "probe_if_trigger_found",
             "always_probe",
         }
+
+    @staticmethod
+    def _pending_kinds_satisfied(pending_kinds, scan: _LateMediaScan) -> bool:
+        """判定待渲染的媒体类型是否都已有结果。
+
+        audio 允许由 video 满足（视频轨道里能拿到音频时无需再等单独的音频），
+        这条规则原先内联在延迟补扫的循环体里。
+        """
+        if "image" in pending_kinds and not scan.image_items:
+            return False
+        if "audio" in pending_kinds and not (scan.audio_items or scan.video_items):
+            return False
+        if "video" in pending_kinds and not scan.video_items:
+            return False
+        return True
 
     @staticmethod
     def _media_policy_allows_audio_probe(
@@ -842,7 +875,6 @@ class BrowserMediaMixin:
         dom_image_detected: bool = False,
         dom_final_image_urls: Optional[List[str]] = None,
     ) -> tuple[bool, Dict[str, Any]]:
-        modalities = self._media_modalities(image_config)
         enabled_types = self._media_enabled_types(image_config)
         stream_media_count = sum(1 for item in (stream_media_items or []) if isinstance(item, dict))
         dom_stream_media_count = sum(1 for item in (dom_stream_media_items or []) if isinstance(item, dict))
@@ -996,7 +1028,7 @@ class BrowserMediaMixin:
                     return []
                 time.sleep(step)
                 elapsed += step
-        
+
         finder = ElementFinder(tab)
         fallback_stream_media_items = self._dedupe_media_items(
             [dict(item) for item in (stream_media_items or []) if isinstance(item, dict)]
@@ -1074,7 +1106,7 @@ class BrowserMediaMixin:
                 f"policy={policy}, signal_seen={signal_seen}"
             )
             return False
-        
+
         try:
             quick_probe_timeout = self._media_quick_probe_timeout(image_config, default=1.0)
             elements, container_mode = _find_candidate_elements(timeout=quick_probe_timeout)
@@ -1098,7 +1130,7 @@ class BrowserMediaMixin:
                     logger.debug("结果容器为空，直接回退到网络流媒体结果")
                     return list(fallback_stream_media_items)
                 return []
-            
+
             def _select_target_element(candidates):
                 if not candidates:
                     return None
@@ -1375,6 +1407,65 @@ class BrowserMediaMixin:
 
                 return self._dedupe_media_items(fallback_items)
 
+            def _items_of_media_type(
+                items: List[Dict],
+                media_type: str,
+            ) -> List[Dict]:
+                return [item for item in items if item.get("media_type") == media_type]
+
+            def _rescan_ready_media(
+                scan: _LateMediaScan,
+                empty_reason: str,
+                *,
+                allow_page_scan: bool,
+            ) -> _LateMediaScan:
+                """重扫一次候选容器并刷新媒体快照。
+
+                找不到候选元素或选不中目标时原样返回（对应原代码里的
+                `continue`），只有真正重扫成功才刷新各媒体类型列表。
+                `container_mode` 无论是否命中都会被刷新，与原行为一致。
+                """
+                elements, container_mode = _find_candidate_elements(timeout=0.5)
+                scan = replace(scan, container_mode=container_mode)
+                if not elements:
+                    return scan
+
+                selected = _select_target_element(elements)
+                if selected is None:
+                    return scan
+
+                media_items = _extract_media_once(selected, quiet=True)
+                ready_media_items = _apply_stream_media_fallback(
+                    self._filter_ready_media_items(media_items, image_config)
+                )
+                scan = replace(
+                    scan,
+                    last_element=selected,
+                    media_items=media_items,
+                    ready_media_items=ready_media_items,
+                    image_items=_items_of_media_type(ready_media_items, "image"),
+                    audio_items=_items_of_media_type(ready_media_items, "audio"),
+                    video_items=_items_of_media_type(ready_media_items, "video"),
+                )
+
+                if allow_page_scan and not scan.image_items and not fallback_stream_media_items:
+                    fresh_page_media_items = _extract_fresh_media_from_page_scope(
+                        empty_reason,
+                        quiet=True,
+                    )
+                    if fresh_page_media_items:
+                        merged_media_items = self._dedupe_media_items(
+                            list(scan.ready_media_items) + fresh_page_media_items
+                        )
+                        scan = replace(
+                            scan,
+                            ready_media_items=merged_media_items,
+                            image_items=_items_of_media_type(merged_media_items, "image"),
+                            audio_items=_items_of_media_type(merged_media_items, "audio"),
+                            video_items=_items_of_media_type(merged_media_items, "video"),
+                        )
+                return scan
+
             request_likely_image = self._looks_like_image_generation_request(request_text_hint)
             media_items = [] if only_audio_mode else _extract_media_once(last_element)
             ready_media_items = _apply_stream_media_fallback(
@@ -1515,6 +1606,15 @@ class BrowserMediaMixin:
                 pending_kinds.discard("image")
                 logger.warning("当前回复包含终止错误且没有本轮新图，跳过图片等待与历史图回退")
 
+            scan = _LateMediaScan(
+                last_element=last_element,
+                media_items=media_items,
+                ready_media_items=ready_media_items,
+                image_items=image_items,
+                audio_items=audio_items,
+                video_items=video_items,
+                container_mode=container_mode,
+            )
             if pending_kinds and not direct_scan_only and not effective_stop_checker():
                 base_timeout = float(image_config.get("load_timeout_seconds", 5.0) or 5.0)
                 late_wait_timeout = float(
@@ -1543,53 +1643,17 @@ class BrowserMediaMixin:
 
                 while time.time() < deadline and not effective_stop_checker():
                     time.sleep(max(0.2, poll_interval))
-                    elements, container_mode = _find_candidate_elements(timeout=0.5)
-                    if not elements:
-                        continue
-                    selected = _select_target_element(elements)
-                    if selected is None:
-                        continue
-                    last_element = selected
-                    media_items = _extract_media_once(last_element, quiet=True)
-                    ready_media_items = _apply_stream_media_fallback(
-                        self._filter_ready_media_items(media_items, image_config)
+                    scan = _rescan_ready_media(
+                        scan,
+                        "pending_wait_empty",
+                        allow_page_scan="image" in pending_kinds,
                     )
-                    image_items = [item for item in ready_media_items if item.get("media_type") == "image"]
-                    audio_items = [item for item in ready_media_items if item.get("media_type") == "audio"]
-                    video_items = [item for item in ready_media_items if item.get("media_type") == "video"]
-
-                    if "image" in pending_kinds and not image_items and not fallback_stream_media_items:
-                        fresh_page_media_items = _extract_fresh_media_from_page_scope(
-                            "pending_wait_empty",
-                            quiet=True,
-                        )
-                        if fresh_page_media_items:
-                            ready_media_items = self._dedupe_media_items(
-                                list(ready_media_items) + fresh_page_media_items
-                            )
-                            image_items = [
-                                item for item in ready_media_items if item.get("media_type") == "image"
-                            ]
-                            audio_items = [
-                                item for item in ready_media_items if item.get("media_type") == "audio"
-                            ]
-                            video_items = [
-                                item for item in ready_media_items if item.get("media_type") == "video"
-                            ]
-
-                    satisfied = True
-                    if "image" in pending_kinds and not image_items:
-                        satisfied = False
-                    if "audio" in pending_kinds and not (audio_items or video_items):
-                        satisfied = False
-                    if "video" in pending_kinds and not video_items:
-                        satisfied = False
-
-                    if satisfied:
+                    if self._pending_kinds_satisfied(pending_kinds, scan):
                         kinds_label = ",".join(sorted(pending_kinds))
                         logger.debug(
                             f"延迟媒体渲染已捕获: kinds={kinds_label} "
-                            f"(late_wait={late_wait_timeout:.1f}s, container={container_mode or 'unknown'})"
+                            f"(late_wait={late_wait_timeout:.1f}s, "
+                            f"container={scan.container_mode or 'unknown'})"
                         )
                         wait_satisfied = True
                         break
@@ -1603,7 +1667,7 @@ class BrowserMediaMixin:
             should_probe_late_image_render = (
                 is_modality_enabled(modalities, "image")
                 and self._media_policy_allows_signal_wait(image_config, "image")
-                and not image_items
+                and not scan.image_items
                 and not pending_kinds
                 and not only_audio_mode
                 and not effective_stop_checker()
@@ -1635,47 +1699,26 @@ class BrowserMediaMixin:
 
                 while time.time() < deadline and not effective_stop_checker():
                     time.sleep(max(0.2, poll_interval))
-                    elements, container_mode = _find_candidate_elements(timeout=0.5)
-                    if not elements:
-                        continue
-
-                    selected = _select_target_element(elements)
-                    if selected is None:
-                        continue
-                    last_element = selected
-                    media_items = _extract_media_once(last_element, quiet=True)
-                    ready_media_items = _apply_stream_media_fallback(
-                        self._filter_ready_media_items(media_items, image_config)
+                    scan = _rescan_ready_media(
+                        scan,
+                        "blind_wait_empty",
+                        allow_page_scan=True,
                     )
-                    image_items = [item for item in ready_media_items if item.get("media_type") == "image"]
-                    audio_items = [item for item in ready_media_items if item.get("media_type") == "audio"]
-                    video_items = [item for item in ready_media_items if item.get("media_type") == "video"]
-
-                    if not image_items and not fallback_stream_media_items:
-                        fresh_page_media_items = _extract_fresh_media_from_page_scope(
-                            "blind_wait_empty",
-                            quiet=True,
-                        )
-                        if fresh_page_media_items:
-                            ready_media_items = self._dedupe_media_items(
-                                list(ready_media_items) + fresh_page_media_items
-                            )
-                            image_items = [
-                                item for item in ready_media_items if item.get("media_type") == "image"
-                            ]
-                            audio_items = [
-                                item for item in ready_media_items if item.get("media_type") == "audio"
-                            ]
-                            video_items = [
-                                item for item in ready_media_items if item.get("media_type") == "video"
-                            ]
-
-                    if image_items:
+                    if scan.image_items:
                         logger.debug(
                             "无显式占位信号，但已在延迟轮询中捕获到图片结果: "
-                            f"late_wait={late_image_wait_timeout:.1f}s, container={container_mode or 'unknown'}"
+                            f"late_wait={late_image_wait_timeout:.1f}s, "
+                            f"container={scan.container_mode or 'unknown'}"
                         )
                         break
+
+            # 延迟等待可能已刷新快照，回写局部变量供后续音频兜底使用
+            last_element = scan.last_element
+            media_items = scan.media_items
+            ready_media_items = scan.ready_media_items
+            image_items = scan.image_items
+            audio_items = scan.audio_items
+            video_items = scan.video_items
 
             should_try_audio_capture = (
                 _audio_trigger_available(
@@ -1696,7 +1739,7 @@ class BrowserMediaMixin:
                 if captured_audio_items:
                     ready_media_items = self._dedupe_media_items(list(ready_media_items) + captured_audio_items)
                     audio_items = [item for item in ready_media_items if item.get("media_type") == "audio"]
-            
+
             media_items = ready_media_items
 
             try:
@@ -1742,7 +1785,7 @@ class BrowserMediaMixin:
             )
 
             return media_items
-            
+
         except Exception as e:
             logger.warning(f"多模态提取异常: {e}")
             return []
@@ -2074,8 +2117,7 @@ class BrowserMediaMixin:
         if not media_items or tab is None:
             return media_items
 
-        save_dir = Path("download_images")
-        save_dir.mkdir(exist_ok=True)
+        save_dir = paths.download_dir()
         max_bytes = max(1, int(max_size_mb)) * 1024 * 1024
 
         # S8/S9：扩展名统一由 app.utils.media_safety 白名单决定（不再使用本地 ext_map / URL 后缀）
@@ -2428,7 +2470,7 @@ class BrowserMediaMixin:
         if not remote_indexes:
             return candidates
 
-        out_dir = Path("download_images")
+        out_dir = paths.download_dir()
         out_dir.mkdir(exist_ok=True)
 
         selector = image_config.get("selector", "img")
@@ -2850,8 +2892,7 @@ class BrowserMediaMixin:
         if not media_items:
             return media_items
 
-        save_dir = Path("download_images")
-        save_dir.mkdir(exist_ok=True)
+        save_dir = paths.download_dir()
         try:
             max_bytes = max(1, int(max_size_mb or 10)) * 1024 * 1024
         except (TypeError, ValueError):
@@ -3008,7 +3049,7 @@ class BrowserMediaMixin:
     def _download_url_images(self, images: List[Dict], tab=None) -> List[Dict]:
         """
         在浏览器内通过 Canvas 压缩图片，保存到本地并返回可访问 URL
-        
+
         流程：
         1. 浏览器 Canvas 压缩 → base64
         2. 后端解码 → 保存到 download_images/
@@ -3016,14 +3057,12 @@ class BrowserMediaMixin:
         """
         import base64
         import uuid
-        from pathlib import Path
         from datetime import datetime
-        
+
         result = []
-        
+
         # 确保目录存在
-        save_dir = Path("download_images")
-        save_dir.mkdir(exist_ok=True)
+        save_dir = paths.download_dir()
         canvas_image_max_size = AppConfig.get_canvas_image_max_size()
         max_canvas_image_bytes = max(1, canvas_image_max_size * canvas_image_max_size * 4)
 
@@ -3031,16 +3070,16 @@ class BrowserMediaMixin:
             if img.get('kind') != 'url':
                 result.append(img)
                 continue
-            
+
             url = img.get('url')
             if not url:
                 result.append(img)
                 continue
-            
+
             if not tab:
                 result.append(img)
                 continue
-            
+
             try:
                 # 🔑 在浏览器中用 Canvas 加载并压缩图片
                 js_code = """
@@ -3055,7 +3094,7 @@ class BrowserMediaMixin:
                                 const MAX_SIZE = Math.max(1, Math.floor(Number(configuredMaxSize) || 1024));
                                 let width = img.naturalWidth;
                                 let height = img.naturalHeight;
-                                
+
                                 if (width > MAX_SIZE || height > MAX_SIZE) {
                                     if (width > height) {
                                         height = Math.round(height * MAX_SIZE / width);
@@ -3065,17 +3104,17 @@ class BrowserMediaMixin:
                                         height = MAX_SIZE;
                                     }
                                 }
-                                
+
                                 const canvas = document.createElement('canvas');
                                 canvas.width = width;
                                 canvas.height = height;
-                                
+
                                 const ctx = canvas.getContext('2d');
                                 ctx.drawImage(img, 0, 0, width, height);
-                                
+
                                 // 转为 JPEG
                                 const dataUri = canvas.toDataURL('image/jpeg', 0.85);
-                                
+
                                 resolve({
                                     success: true,
                                     dataUri: dataUri,
@@ -3086,17 +3125,17 @@ class BrowserMediaMixin:
                                 resolve({ success: false, error: 'Canvas: ' + e.message });
                             }
                         };
-                        
+
                         img.onerror = function() {
                             resolve({ success: false, error: 'Load failed' });
                         };
-                        
+
                         setTimeout(() => resolve({ success: false, error: 'Timeout' }), 15000);
                         img.src = imageUrl;
                     });
                 })(arguments[0], arguments[1]);
                 """
-                
+
                 # ===== PROBE: 验证 run_js 是否等待 Promise，并检查图片/Fetch 可用性 =====
                 probe_js = """
                 (function(u){
@@ -3163,10 +3202,10 @@ class BrowserMediaMixin:
 
                 download_result = driver_for_tab(tab).run_js(js_code, url, canvas_image_max_size)
 
-                logger.info(f"[PROBE_JS] canvas_result_type={type(download_result).__name__}, value={str(download_result)[:300]}")                
+                logger.info(f"[PROBE_JS] canvas_result_type={type(download_result).__name__}, value={str(download_result)[:300]}")
                 if download_result and download_result.get('success'):
                     data_uri = download_result['dataUri']
-                    
+
                     # 解析 base64
                     # 格式: data:image/jpeg;base64,/9j/4AAQSkZJRg...
                     if ',' in data_uri:
@@ -3177,7 +3216,7 @@ class BrowserMediaMixin:
                             ext = '.png'
                         else:
                             ext = '.jpg'
-                        
+
                         # 解码并保存
                         compact_b64 = "".join(str(b64_data or "").split())
                         estimated_size = self._estimate_base64_decoded_size(compact_b64)
@@ -3186,20 +3225,20 @@ class BrowserMediaMixin:
                         image_bytes = base64.b64decode(compact_b64)
                         if len(image_bytes) > max_canvas_image_bytes:
                             raise ValueError(f"canvas_image_too_large:{len(image_bytes)}")
-                        
+
                         # 生成唯一文件名
                         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                         unique_id = uuid.uuid4().hex[:8]
                         filename = f"{timestamp}_{unique_id}{ext}"
                         filepath = save_dir / filename
-                        
+
                         # 写入文件
                         with open(filepath, 'wb') as f:
                             f.write(image_bytes)
-                        
+
                         # 构建可访问的 URL
                         accessible_url = f"/download_images/{filename}"
-                        
+
                         new_img = img.copy()
                         new_img['kind'] = 'url'
                         new_img['url'] = accessible_url
@@ -3210,18 +3249,18 @@ class BrowserMediaMixin:
                         new_img['byte_size'] = len(image_bytes)
                         new_img['source'] = 'local_file'
                         new_img['local_path'] = str(filepath)
-                        
+
                         result.append(new_img)
                         logger.info(f"✅ 图片已保存: {filename} ({len(image_bytes)} bytes)")
                         continue
-                
+
                 error_msg = download_result.get('error', 'Unknown') if download_result else 'No result'
                 logger.warning(f"⚠️ 图片处理失败: {error_msg}")
-            
+
             except Exception as e:
                 logger.warning(f"⚠️ 图片保存异常: {str(e)[:100]}")
-            
+
             # 失败时保留原 URL
             result.append(img)
-        
+
         return result

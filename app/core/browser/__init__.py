@@ -1,6 +1,6 @@
 # app/core/browser/__init__.py
 
-from .main import BrowserCore, get_browser, browser
+from .main import BrowserCore, browser, get_browser
 
 __all__ = [
     'BrowserCore',

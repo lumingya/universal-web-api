@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from app.core.parsers.lmarena_parser import LmarenaParser, _CP1252_TO_LATIN1
+from app.core.parsers.lmarena_parser import _CP1252_TO_LATIN1, LmarenaParser
 
 
 class _FullParser(LmarenaParser):

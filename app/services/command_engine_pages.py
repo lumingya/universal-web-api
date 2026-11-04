@@ -8,7 +8,9 @@ import copy
 import json
 import os
 import time
-from typing import Dict, List, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List
+
+from app.core.driver import driver_for_tab
 from app.core.page_lifecycle import (
     BACKGROUND_WAKE_CDP_TIMEOUT,
     BACKGROUND_WAKE_JS_TIMEOUT,
@@ -17,10 +19,9 @@ from app.core.page_lifecycle import (
     restore_visibility_emulation,
 )
 from app.services.command_engine_common import logger
-from app.core.driver import driver_for_tab
 
 if TYPE_CHECKING:
-    from app.core.tab_pool import TabSession  # noqa: F401
+    from app.core.tab_pool import TabSession
 
 
 class CommandEnginePagesMixin:

@@ -10,7 +10,6 @@ from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 import requests
 
-
 ARENA_CLASH_API = os.getenv("CLASH_API", os.getenv("ARENA_CLASH_API", "http://127.0.0.1:9097")).rstrip("/")
 ARENA_CLASH_SECRET = os.getenv("CLASH_SECRET", os.getenv("ARENA_CLASH_SECRET", "1"))
 ARENA_CLASH_SELECTOR = os.getenv("CLASH_SELECTOR", os.getenv("ARENA_CLASH_SELECTOR", "主代理"))

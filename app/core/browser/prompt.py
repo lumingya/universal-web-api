@@ -4,13 +4,12 @@ import json
 import os
 import random
 import re
-from typing import Optional, List, Dict, Any, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List
 
-from app.core.config import logger, BrowserConstants
-from app.utils.image_handler import extract_images_from_messages
+from app.core.config import BrowserConstants, logger
 
 if TYPE_CHECKING:
-    from .main import BrowserCore
+    pass
 
 
 class BrowserPromptMixin:
@@ -109,7 +108,7 @@ class BrowserPromptMixin:
                 is_list_like = hasattr(content, '__iter__') and not isinstance(content, (str, bytes, dict, set))
             except Exception:
                 is_list_like = False
-        
+
         if is_list_like:
             try:
                 if not isinstance(content, list):
@@ -118,7 +117,7 @@ class BrowserPromptMixin:
             except Exception as e:
                 logger.warning(f"[CONTENT_PARSE] 转换为 list 失败: {e}")
                 return "[内容解析失败]"
-            
+
             text_parts = []
             text_item_count = 0
             image_count = 0
@@ -235,7 +234,7 @@ class BrowserPromptMixin:
             meta_parts.append(f"name: {name}")
         if call_id:
             meta_parts.append(f"id: {call_id}")
-        
+
         if meta_parts:
             header = f"[Tool Result ({', '.join(meta_parts)})]"
         else:
@@ -365,7 +364,7 @@ class BrowserPromptMixin:
         try:
             cfg_path = "config/browser_config.json"
             if os.path.exists(cfg_path):
-                with open(cfg_path, "r", encoding="utf-8") as f:
+                with open(cfg_path, encoding="utf-8") as f:
                     data = json.load(f) or {}
                 if "UPLOAD_HISTORY_IMAGES" in data:
                     vv = data.get("UPLOAD_HISTORY_IMAGES")

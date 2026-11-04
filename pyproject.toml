@@ -1,5 +1,90 @@
-# 仅存放工具配置。本项目不是可安装的 Python 包，运行方式见 README 与 start.py。
-# 最低支持的 Python 版本以 start.py 中的 MIN_PYTHON 为准（当前为 3.10）。
+# ============================================
+# Universal Web-to-API - 项目与依赖配置
+# ============================================
+# 环境完全由 uv 管理，不使用 pip / requirements.txt / 启动脚本。
+# 依赖的唯一事实来源是本文件的 [project.dependencies] 与 [dependency-groups]；
+# 精确版本记录在 uv.lock 中，由 `uv lock` / `uv sync` 维护。
+#
+# 常用命令：
+#   uv sync                # 创建 .venv，安装运行 + dev 依赖（按 uv.lock）
+#   uv sync --no-dev       # 只安装运行依赖
+#   uv run python main.py  # 启动服务（自动拉起浏览器）
+#   uv run pytest          # 运行测试
+#   uv run ruff check .    # 运行 lint
+#   uv add <包名>          # 添加运行依赖
+#   uv add --group dev <包名>
+#
+# 新增依赖请使用 uv add，不要手工安装到系统 Python。
+
+[project]
+name = "universal-web-api"
+version = "3.0.1"
+description = "Local OpenAI/Anthropic-compatible API bridge for browser-based AI sites"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "AGPL-3.0" }
+authors = [{ name = "Universal Web-to-API contributors" }]
+keywords = ["fastapi", "browser-automation", "openai", "anthropic", "drissionpage"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+dependencies = [
+    "fastapi>=0.100.0,<0.110.0",
+    "uvicorn[standard]>=0.23.0,<0.30.0",
+    "pydantic>=2.0.0,<3.0.0",
+    "typing-extensions>=4.6.0; python_version < '3.11'",
+    # 上界收紧到 <4.2：启动时会用 patch_drissionpage.py **改写本库 Listener 源码**，
+    # 注入点依赖其内部代码结构。放开到 4.x 任意版本，一次 minor 升级就可能让补丁
+    # 静默失效（表现只是网络监听模式不可用）。补丁脚本现在会在写回后复核并报错退出
+    # （见 tests/test_drissionpage_patch.py），但收紧上界仍是第一道防线。
+    # 升级 DrissionPage 时必须同步验证 patch_drissionpage.py 的注入点仍然命中。
+    "drissionpage>=4.0.0,<4.2.0.0",
+    "beautifulsoup4>=4.12.0",
+    "json-repair>=0.61.7,<1.0.0",
+    "jsonschema>=4.18.0,<5.0.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0,<3.0.0",
+    "pysocks>=1.7.1,<2.0.0",
+    "pyperclip>=1.8.2",
+    "pillow>=10.0.0",
+    "reportlab>=4.0.0,<5.0.0",
+    "pywin32>=306; sys_platform == 'win32'",
+    "psutil>=5.9.0",
+    # Time-bounded regular expressions for workflow conditions (no eval).
+    "regex>=2024.5.15,<2027.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+    # FastAPI/Starlette TestClient 与 ASGITransport 端到端测试依赖。
+    "httpx>=0.27,<1",
+    # tests/test_cancel_storm_regressions.py 直接使用 anyio。
+    "anyio>=4,<5",
+    # Optional local Chromium UI/DOM integration tests (not required by the server).
+    "playwright>=1.50,<2",
+    # R1-5 协议一致性测试：用官方 SDK 作为客户端。
+    "openai>=1.40,<4",
+    "anthropic>=0.40,<2",
+    # 格式化 / lint（pyproject 中已有 ruff 配置）。
+    "ruff>=0.6",
+    # 协议层类型检查基线（tests/test_typecheck_ratchet.py）。
+    "mypy>=1.11,<3",
+    # Python 3.10 没有 tomllib，测试读取 pyproject.toml 时需要。
+    "tomli>=2.0; python_version < '3.11'",
+    "radon>=6.0.1",
+]
+
+[tool.uv]
+# 非库项目：uv 只管理依赖和 .venv，不构建/安装本项目。
+package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -14,8 +99,64 @@ markers = [
 [tool.ruff]
 target-version = "py310"
 line-length = 120
-extend-exclude = ["venv", "scratch", "tmp", "temp", "chrome_profile", "custom_scripts", "js", "logs"]
+extend-exclude = [
+    ".venv",
+    "venv",
+    "scratch",
+    "tmp",
+    "temp",
+    "chrome_profile",
+    "custom_scripts",
+    "js",
+    "logs",
+]
+
+[tool.mypy]
+# 基线阶段：只报告、不阻断，由 tests/test_typecheck_ratchet.py 做数量棘轮。
+# 范围与理由见该测试文件的 docstring（重点：全量跟进导入会被 mixin 组合模式的
+# 1415 条 attr-defined 淹没，故只统计协议层文件自身的报错）。
+python_version = "3.10"
+ignore_missing_imports = true
+follow_imports = "silent"
+check_untyped_defs = false
+warn_unused_ignores = false
+warn_redundant_casts = false
 
 [tool.ruff.lint]
-# 最小基线：只启用“出现即是 bug”的规则（语法错误、未定义名称、比较/断言误用等），风格类规则暂不启用。
-select = ["E9", "F63", "F7", "F82", "F404"]
+# 分档启用，随重构进度逐步收紧（见 docs/plans/REFACTOR_PLAN-2026-10.md）。
+#
+# 第一档（已启用）：出现即是 bug 的规则 + 纯机械的卫生规则。
+#   E9/F63/F7/F82/F404  语法错误、未定义名称、比较/断言误用
+#   F401/F841           未使用的导入 / 未使用的局部变量
+#   I                   import 排序（isort 规则）
+#   W291/W293/W292      行尾空白、空行含空白、文件末尾缺换行
+#   RUF100              无用的 noqa
+#   UP015/RUF010        冗余 open 模式、多余的 f-string 类型转换
+#
+# 暂未启用（有意为之，见 docs/plans/REFACTOR_PLAN-2026-10.md）：
+#   E701/E702 一行多语句（389 处）——ruff 无自动修复，需手工改写 389 行；
+#              且集中在覆盖率 <20% 的高复杂度文件里，纯风格收益换不来这个风险。
+#              待对应文件被拆分、有测试覆盖后再随该模块一并处理。
+#   PLC0415 函数内 import（690 处）——随导入环棘轮自然下降，不能单独强推
+#   T201 print（app/ 内 78 处）——需逐个改成 logger，单独一步
+#   B904 raise-without-from（99 处）——影响异常链可观测性，优先级高于风格类
+select = [
+    "E9", "F63", "F7", "F82", "F404",
+    "F401", "F841",
+    "I",
+    "W291", "W293", "W292",
+    "RUF100", "UP015", "RUF010",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 包 __init__.py 的“未使用导入”通常是刻意再导出，删掉会破坏对外 API。
+"__init__.py" = ["F401"]
+# 以下是兼容门面 / 再导出枢纽，职责就是把名字透出去；收窄导出面属于重构步骤 5。
+# 其中 app/api/chat.py 尤其危险：测试通过 monkeypatch.setattr("app.api.chat.xxx")
+# 这类**字符串**引用访问其中的名字，任何静态导入分析（含 ruff F401）都看不见，
+# 删掉看似未用的导入会直接让测试 AttributeError。已实测踩到，勿轻易放开。
+"app/core/config.py" = ["F401"]
+"app/core/tab_pool.py" = ["F401"]
+"app/services/config/engine.py" = ["F401"]
+"app/api/chat.py" = ["F401"]
+"app/api/system/__init__.py" = ["F401"]

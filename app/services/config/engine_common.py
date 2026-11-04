@@ -1,17 +1,17 @@
 """ConfigEngine 及其 mixin 共用的模块级定义（R2-3 拆分时从 engine.py 原样迁出，engine.py 仍重新导出）。"""
 
-import os
 import copy
+import os
 import re
+from typing import Any, Dict, List
+
 from app.core.config import get_logger
-from typing import Dict, List, Any
+from app.core.request_transport import get_default_request_transport_config
 from app.models.schemas import (
     WorkflowStep,
     get_default_attachment_monitor_config,
     get_default_send_confirmation_config,
 )
-from app.core.request_transport import get_default_request_transport_config
-
 
 logger = get_logger("CFG_ENG")
 

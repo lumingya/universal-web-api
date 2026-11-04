@@ -8,69 +8,70 @@ app/services/config/engine.py - 配置引擎主类
 - 图片配置、提取器管理
 """
 
+import copy
 import json
 import os
-import copy
 import re
 import threading
 import time
-from app.core.config import get_logger
-from typing import Dict, Optional, List, Any, Set, Union, Callable
+from typing import Any, Callable, Dict, List, Optional, Set, Union
 from urllib.parse import urljoin
+
+from app.core.config import get_logger
 from app.core.parsers import ParserRegistry
+from app.core.request_transport import (
+    get_default_request_transport_config,
+    normalize_request_transport_config,
+)
 from app.models.schemas import (
-    SiteConfig,
-    WorkflowStep,
-    SelectorDefinition,
     ADVANCED_FIELDS,
     PRESET_ADVANCED_FIELDS,
     SITE_ADVANCED_FIELDS,
-    get_default_image_extraction_config,
-    get_default_file_paste_config,
-    get_default_prompt_padding_config,
-    get_default_site_advanced_config,
+    SelectorDefinition,
+    SiteConfig,
+    WorkflowStep,
     get_default_attachment_monitor_config,
+    get_default_file_paste_config,
+    get_default_image_extraction_config,
+    get_default_prompt_padding_config,
     get_default_send_confirmation_config,
-    get_modality_policy,
+    get_default_site_advanced_config,
     get_enabled_modalities,
+    get_modality_policy,
     is_modality_enabled,
     normalize_modalities_config,
     normalize_modality_policy,
 )
 from app.services.extractor_manager import extractor_manager
 from app.services.parser_manager import parser_manager
+from app.utils.site_discovery import automatic_discovery_allowed, selectors_match_chat_html, specific_chat_selectors
 from app.utils.site_rules import derive_site_card_id, get_site_rule
-from app.utils.site_discovery import automatic_discovery_allowed, specific_chat_selectors, selectors_match_chat_html
-from app.core.request_transport import (
-    get_default_request_transport_config,
-    normalize_request_transport_config,
-)
-from .cache import ConfigCache
-from .site_store import SiteStore
-from .managers import GlobalConfigManager, ImagePresetsManager
-from .processors import HTMLCleaner, SelectorValidator, AIAnalyzer
 
+from .cache import ConfigCache
 
 # R2-3：模块级定义迁到 engine_common，这里重新导出以保持兼容（外部与测试都从 engine 导入这些名字）
-from .engine_common import (  # noqa: E402,F401
-    ConfigConstants,
+from .engine_common import (
+    _MISSING,
+    _SITE_STARTUP_JS_PATTERNS,
     DEFAULT_PRESET_NAME,
     DEFAULT_WORKFLOW,
     PRESET_FIELDS,
-    _MISSING,
-    _SITE_STARTUP_JS_PATTERNS,
+    ConfigConstants,
     _coerce_bool,
     _merge_config_patch,
     get_default_network_config,
     get_default_stream_config,
     logger,
 )
-from .engine_local_overrides import ConfigLocalOverridesMixin  # noqa: E402
-from .engine_migrations import ConfigMigrationsMixin  # noqa: E402
-from .engine_presets import ConfigPresetsMixin  # noqa: E402
-from .engine_sites import ConfigSitesMixin  # noqa: E402
-from .engine_media import ConfigMediaMixin  # noqa: E402
-from .engine_stream import ConfigStreamMixin  # noqa: E402
+from .engine_local_overrides import ConfigLocalOverridesMixin
+from .engine_media import ConfigMediaMixin
+from .engine_migrations import ConfigMigrationsMixin
+from .engine_presets import ConfigPresetsMixin
+from .engine_sites import ConfigSitesMixin
+from .engine_stream import ConfigStreamMixin
+from .managers import GlobalConfigManager, ImagePresetsManager
+from .processors import AIAnalyzer, HTMLCleaner, SelectorValidator
+from .site_store import SiteStore
 
 # ================= 配置引擎主类 =================
 

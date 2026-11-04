@@ -7,7 +7,6 @@ from __future__ import annotations
 import copy
 from typing import Any, Callable, Dict, List
 
-
 PageRequestTransportExecutor = Callable[..., Dict[str, Any]]
 
 _PROFILES: Dict[str, Dict[str, Any]] = {}

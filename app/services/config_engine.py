@@ -6,12 +6,7 @@ app/services/config_engine.py - 兼容性代理文件
 """
 
 # 从新模块导入所有内容
-from app.services.config import (
-    config_engine,
-    ConfigEngine,
-    ConfigConstants,
-    DEFAULT_WORKFLOW
-)
+from app.services.config import DEFAULT_WORKFLOW, ConfigConstants, ConfigEngine, config_engine
 
 # 保持原有导出
 __all__ = ['config_engine', 'ConfigEngine', 'ConfigConstants', 'DEFAULT_WORKFLOW']

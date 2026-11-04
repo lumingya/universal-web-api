@@ -1,0 +1,36 @@
+{
+  "core_must_not_import_services": {
+    "app/core/browser/connection.py": 1,
+    "app/core/browser/main.py": 1,
+    "app/core/browser/workflow.py": 15,
+    "app/core/chat_job.py": 1,
+    "app/core/config_parts/cute_translator.py": 1,
+    "app/core/config_parts/sse_formatter.py": 2,
+    "app/core/network_monitor.py": 1,
+    "app/core/page_lifecycle.py": 1,
+    "app/core/stream_monitor.py": 2,
+    "app/core/tab_pool_parts/manager.py": 1,
+    "app/core/tab_pool_parts/network.py": 1,
+    "app/core/tab_pool_parts/pool_acquire.py": 1,
+    "app/core/tab_pool_parts/pool_contexts.py": 2,
+    "app/core/tab_pool_parts/pool_maintenance.py": 1,
+    "app/core/tab_pool_parts/pool_sessions.py": 2,
+    "app/core/tab_pool_parts/pool_status.py": 1,
+    "app/core/tab_pool_parts/recovery.py": 1,
+    "app/core/tab_pool_parts/session.py": 3,
+    "app/core/workflow/arena_direct_guard.py": 1,
+    "app/core/workflow/executor.py": 12,
+    "app/core/workflow/executor_actions.py": 1,
+    "app/core/workflow/executor_send.py": 1
+  },
+  "utils_must_stay_a_leaf": {
+    "app/utils/browser_profile_identity.py": 1,
+    "app/utils/diagnostics_access.py": 1,
+    "app/utils/file_paste.py": 1,
+    "app/utils/human_mouse.py": 2,
+    "app/utils/image_handler.py": 1,
+    "app/utils/image_validation.py": 2,
+    "app/utils/media_access.py": 1,
+    "app/utils/paste.py": 2
+  }
+}

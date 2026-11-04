@@ -554,7 +554,6 @@ class TabPoolTabsMixin:
 
             raw_target_count = 0
             try:
-                browser = self._get_browser_handle()
                 existing_tabs = self._list_current_tab_refs()
                 raw_target_count = len(existing_tabs)
                 logger.debug(f"[TabPool] 检测到 {raw_target_count} 个浏览器 page target")
@@ -621,7 +620,6 @@ class TabPoolTabsMixin:
     def refresh_tabs(self) -> Dict:
         """手动刷新标签页列表（供外部调用）"""
         with self._condition:
-            old_count = len(self._tabs)
             old_ids = set(self._tabs.keys())
 
             # 强制扫描（不受时间间隔限制）

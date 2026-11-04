@@ -12,11 +12,12 @@ tests/test_workflow_js_exec_integration.py - 工作流 JS_EXEC 步骤与前后�
 
 import unittest
 from typing import Any, Dict, List
+
 from fastapi import HTTPException
 
 from app.api.config_workflow_support import (
-    _scan_workflow_scripts,
     _load_workflow_script_content,
+    _scan_workflow_scripts,
 )
 from app.core.config import WorkflowError
 from app.core.workflow.executor import WorkflowExecutor

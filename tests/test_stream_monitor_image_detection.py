@@ -4,18 +4,18 @@ import pytest
 from PIL import Image
 
 import app.services.arena_image_generation as arena_image_generation
+from app.core.config import WorkflowError
+from app.core.network_monitor import NetworkMonitorError
 from app.core.stream_monitor import (
     StreamContext,
     StreamMonitor,
     _is_pending_image_status_text,
 )
-from app.core.network_monitor import NetworkMonitorError
-from app.core.config import WorkflowError
 from app.core.workflow.executor import WorkflowExecutor
 from app.services.arena_image_generation import (
-    ARENA_NATIVE_STOP_SELECTOR,
     ARENA_IMAGE_GENERATION_FAILED_CODE,
     ARENA_IMAGE_UNCHANGED_CODE,
+    ARENA_NATIVE_STOP_SELECTOR,
     ARENA_PROMPT_REJECTED_CODE,
     ARENA_RESULT_BASELINE_PROPERTY,
     ArenaImageGenerationError,

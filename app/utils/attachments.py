@@ -107,24 +107,28 @@ def safe_filename(value, default="attachment.bin"):
     return name
 
 
-def normalize_attachment_part(part):
-    """Return canonical attachment or None for non-attachment blocks; never stringify bytes."""
-    if not isinstance(part, dict):
-        return None
-    kind = str(part.get("type") or "").lower().strip()
-    if kind not in ATTACHMENT_TYPES:
-        source = part.get("source")
-        if any(key in part for key in ("file_data", "file_id")) or (isinstance(source, dict) and source.get("type") == "base64"):
-            raise AttachmentError("attachment_block_unsupported", "不支持的附件内容块类型，未将二进制内容转换为提示词")
-        return None
-    image = kind in {"image", "image_url", "input_image"}
-    value = part.get("file") if isinstance(part.get("file"), dict) else part
-    source = part.get("source") if isinstance(part.get("source"), dict) else {}
-    if value.get("file_id") or part.get("file_id") or source.get("file_id"):
-        raise AttachmentError("attachment_file_id_unsupported", "暂不支持 file_id，请传文件 URL 或完整 base64 数据")
-    mime = str(source.get("media_type") or value.get("mime_type") or part.get("mime_type") or "").split(";", 1)[0].strip().lower()
-    filename = value.get("filename") or part.get("filename") or part.get("title")
-    ref = None
+_AUDIO_FORMAT_MIMES = {
+    "wav": "audio/wav",
+    "mp3": "audio/mpeg",
+    "ogg": "audio/ogg",
+    "flac": "audio/flac",
+    "webm": "audio/webm",
+    "mp4": "audio/mp4",
+    "m4a": "audio/mp4",
+    "aac": "audio/aac",
+}
+
+_REF_ALLOWED_PREFIXES = ("https://", "http://", "data:")
+
+
+def _resolve_attachment_ref(kind, part, value, image):
+    """按内容块类型解析出引用（URL 或 data URI）。
+
+    返回 (ref, mime, filename)：后续两个值只在 input_audio 分支被改写
+    （格式决定 mime，并给出默认文件名），其余分支原样透传。
+    """
+    mime = None
+    filename = None
     if image:
         ref = part.get("image_url") or part.get("url")
         if isinstance(ref, dict):
@@ -133,40 +137,83 @@ def normalize_attachment_part(part):
         audio = part.get("input_audio")
         if not isinstance(audio, dict):
             raise AttachmentError("attachment_invalid_source", "input_audio 必须包含 data 和 format")
-        audio_mimes = {"wav": "audio/wav", "mp3": "audio/mpeg", "ogg": "audio/ogg", "flac": "audio/flac", "webm": "audio/webm", "mp4": "audio/mp4", "m4a": "audio/mp4", "aac": "audio/aac"}
         fmt = str(audio.get("format") or "").lower()
-        if fmt not in audio_mimes:
+        if fmt not in _AUDIO_FORMAT_MIMES:
             raise AttachmentError("attachment_audio_format_unsupported", "不支持的 input_audio.format")
-        mime = audio_mimes[fmt]
+        mime = _AUDIO_FORMAT_MIMES[fmt]
         data = audio.get("data")
         ref = f"data:{mime};base64,{data}" if isinstance(data, str) and data else None
-        filename = filename or f"audio.{fmt}"
+        filename = f"audio.{fmt}"
     else:
         ref = value.get("file_data") or value.get("file_url") or part.get("audio_url") or part.get("video_url") or part.get("url")
         if isinstance(ref, dict):
             ref = ref.get("url")
-    if source:
-        source_type = source.get("type")
-        if source_type == "url":
-            ref = source.get("url")
-        elif source_type == "base64":
-            data = source.get("data")
-            ref = f"data:{mime or ('image/png' if image else 'application/octet-stream')};base64,{data}" if isinstance(data, str) and data else None
-        elif source_type == "text" and kind == "document":
-            text = source.get("data")
-            if not isinstance(text, str):
-                raise AttachmentError("attachment_invalid_source", "document text source 必须为字符串")
-            ref = "data:text/plain;base64," + base64.b64encode(text.encode("utf-8")).decode("ascii")
-            filename, mime = filename or "document.txt", "text/plain"
-        else:
-            raise AttachmentError("attachment_source_unsupported", "不支持的附件 source.type")
+    return ref, mime, filename
+
+
+def _apply_attachment_source(source, kind, image, ref, mime, filename):
+    """把 source 子段叠加到已解析出的引用上。
+
+    source 在引用解析之后执行，因此会覆盖前者。返回 (ref, mime, filename)。
+    """
+    source_type = source.get("type")
+    if source_type == "url":
+        return source.get("url"), mime, filename
+    if source_type == "base64":
+        data = source.get("data")
+        default_mime = "image/png" if image else "application/octet-stream"
+        ref = f"data:{mime or default_mime};base64,{data}" if isinstance(data, str) and data else None
+        return ref, mime, filename
+    if source_type == "text" and kind == "document":
+        text = source.get("data")
+        if not isinstance(text, str):
+            raise AttachmentError("attachment_invalid_source", "document text source 必须为字符串")
+        ref = "data:text/plain;base64," + base64.b64encode(text.encode("utf-8")).decode("ascii")
+        return ref, "text/plain", filename or "document.txt"
+    raise AttachmentError("attachment_source_unsupported", "不支持的附件 source.type")
+
+
+def _validate_attachment_ref(ref):
+    """校验并最终化引用：去空白、限定协议、data URI 必须带完整 base64。
+
+    返回 strip 过的引用。
+    """
     if not isinstance(ref, str) or not ref.strip():
         raise AttachmentError("attachment_missing_data", "附件缺少 URL 或完整 base64 数据")
     ref = ref.strip()
-    if not ref.startswith(("https://", "http://", "data:")):
+    if not ref.startswith(_REF_ALLOWED_PREFIXES):
         raise AttachmentError("attachment_source_unsupported", "附件仅支持 HTTP(S) URL 或 base64 data URI，不允许本地路径")
     if ref.startswith("data:") and (";base64," not in ref or not ref.split(";base64,", 1)[1].strip()):
         raise AttachmentError("attachment_invalid_base64", "附件 data URI 必须包含完整 base64 数据")
+    return ref
+
+
+def _reject_unsupported_attachment_block(part):
+    """类型不在 ATTACHMENT_TYPES 内：带附件特征就报错，否则交由调用方跳过。
+
+    返回 True 表示"这是一个不支持的附件块，已经抛过错了"（实际上不会返回）。
+    """
+    source = part.get("source")
+    if any(key in part for key in ("file_data", "file_id")) or (isinstance(source, dict) and source.get("type") == "base64"):
+        raise AttachmentError("attachment_block_unsupported", "不支持的附件内容块类型，未将二进制内容转换为提示词")
+    return False
+
+
+def _attachment_value_source(part):
+    """取出取值来源与 source 子段。
+
+    `file` / `source` 只有是 dict 时才作为来源，否则分别退化成 part 自身与空
+    dict（空 dict 不会进入 source 分支）。顺带完成 file_id 的拒绝检查。
+    """
+    value = part.get("file") if isinstance(part.get("file"), dict) else part
+    source = part.get("source") if isinstance(part.get("source"), dict) else {}
+    if value.get("file_id") or part.get("file_id") or source.get("file_id"):
+        raise AttachmentError("attachment_file_id_unsupported", "暂不支持 file_id，请传文件 URL 或完整 base64 数据")
+    return value, source
+
+
+def _build_attachment_payload(part, image, ref, mime, filename):
+    """组装最终输出：image 走 image_url（带 detail），其余走 file。"""
     if image:
         payload = {"url": ref}
         detail = (part.get("image_url") or {}).get("detail") if isinstance(part.get("image_url"), dict) else part.get("detail")
@@ -176,6 +223,32 @@ def normalize_attachment_part(part):
     return {"type": "file", "file": {"file_data" if ref.startswith("data:") else "file_url": ref,
             **({"filename": safe_filename(filename)} if filename else {}), **({"mime_type": mime} if mime else {})}}
 
+
+def normalize_attachment_part(part):
+    """Return canonical attachment or None for non-attachment blocks; never stringify bytes."""
+    if not isinstance(part, dict):
+        return None
+    kind = str(part.get("type") or "").lower().strip()
+    if kind not in ATTACHMENT_TYPES:
+        _reject_unsupported_attachment_block(part)
+        return None
+
+    image = kind in {"image", "image_url", "input_image"}
+    value, source = _attachment_value_source(part)
+    mime = str(source.get("media_type") or value.get("mime_type") or part.get("mime_type") or "").split(";", 1)[0].strip().lower()
+    filename = value.get("filename") or part.get("filename") or part.get("title")
+
+    ref, audio_mime, audio_filename = _resolve_attachment_ref(kind, part, value, image)
+    if audio_mime is not None:
+        mime = audio_mime
+    if audio_filename is not None:
+        filename = filename or audio_filename
+
+    if source:
+        ref, mime, filename = _apply_attachment_source(source, kind, image, ref, mime, filename)
+
+    ref = _validate_attachment_ref(ref)
+    return _build_attachment_payload(part, image, ref, mime, filename)
 
 def normalize_messages(messages):
     result = []

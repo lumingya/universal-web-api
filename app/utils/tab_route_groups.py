@@ -7,7 +7,6 @@ from app.utils.site_url import (
     normalize_route_domain,
 )
 
-
 ROUTE_GROUP_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 ROUTE_GROUP_ALLOCATION_MODES = {"first_idle", "round_robin", "random"}
 

@@ -9,22 +9,20 @@ v2.0 改动：
 
 import asyncio
 import atexit
-import threading
-import json
-import os
-import time
-import uuid
-import re
-import math
-import hashlib
 import copy
-import random
-from enum import Enum
-from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List
+import hashlib
+import json
+import math
+import os
+import re
+import threading
+import time
 from collections import OrderedDict
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
-from app.core.config import BrowserConstants, get_logger, _request_context
+from app.core.config import BrowserConstants, _request_context, get_logger
 from app.services.sse_utils import iter_sse_payloads
 from app.utils.site_url import get_canonical_route_domain
 
@@ -214,7 +212,7 @@ class RequestContext:
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
-    
+
     _cancel_flag: bool = field(default=False, repr=False)
     cancel_reason: Optional[str] = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -222,7 +220,7 @@ class RequestContext:
     # 必须最外层获取，持有期间允许再拿 ctx._lock / manager._history_lock（内层顺序不变）
     _history_append_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _sse_chunk_buffer: str = field(default="", repr=False)
-    
+
     # v2.0 新增：关联的标签页 ID
     tab_id: Optional[str] = None
     client_fp: str = ""
@@ -231,11 +229,11 @@ class RequestContext:
     monitor: Dict[str, Any] = field(default_factory=dict)
     started_at_monotonic: Optional[float] = field(default=None, repr=False)
     last_activity_at: Optional[float] = field(default=None, repr=False)
-    
+
     def should_stop(self) -> bool:
         with self._lock:
             return self._cancel_flag
-    
+
     def request_cancel(self, reason: str = "unknown"):
         with self._lock:
             if self.status in (
@@ -290,7 +288,7 @@ class RequestContext:
         with self._lock:
             if self.status == RequestStatus.RUNNING:
                 self.last_activity_at = time.time()
-    
+
     def mark_completed(self):
         with self._lock:
             if self.status == RequestStatus.RUNNING or (
@@ -303,7 +301,7 @@ class RequestContext:
             ):
                 self.status = RequestStatus.COMPLETED
             self.finished_at = time.time()
-    
+
     def mark_failed(self, reason: str = None):
         with self._lock:
             # 修复#2：终态保护——已 COMPLETED/FAILED/CANCELLED 的请求不再改写为 FAILED
@@ -322,13 +320,13 @@ class RequestContext:
             self.finished_at = time.time()
             if reason:
                 self.cancel_reason = reason
-    
+
     def get_duration(self) -> float:
         with self._lock:
             end = self.finished_at or time.time()
             start = self.started_at or self.created_at
         return max(0.0, end - start)
-    
+
     def is_terminal(self) -> bool:
         with self._lock:
             return self.status in (
@@ -397,15 +395,15 @@ class RequestContext:
 class RequestManager:
     """
     请求管理器（v2.0 - 纯追踪模式）
-    
+
     v2.0 改动：
     - 不再持有执行锁
     - 只负责请求追踪和取消信号
     """
-    
+
     _instance: Optional['RequestManager'] = None
     _instance_lock = threading.Lock()
-        
+
     # 僵尸请求超时时间（秒）- 超过此时间的 RUNNING 请求将被强制清理
     # 注意：该类属性在 import 时求值，仅作兼容兜底；运行时请使用 _zombie_ttl() 以支持热配置
     ZOMBIE_TTL = _get_positive_int_env("REQUEST_ZOMBIE_TTL", 600)
@@ -418,11 +416,11 @@ class RequestManager:
                     instance._initialized = False
                     cls._instance = instance
         return cls._instance
-    
+
     def __init__(self):
         if self._initialized:
             return
-        
+
         self._requests: OrderedDict[str, RequestContext] = OrderedDict()
         self._requests_lock = threading.Lock()
         self._request_counter = 0  # 请求计数器
@@ -471,7 +469,7 @@ class RequestManager:
         self._initialized = True
 
         logger.debug("RequestManager 初始化完成")
-        
+
     def _runtime_store(self):
         """R2-5：请求历史与统计的 SQLite 存储；默认与旧 JSON 文件同目录（config/runtime.sqlite3）。"""
         store = getattr(self, "_store", None)
@@ -493,7 +491,7 @@ class RequestManager:
             stats_file = getattr(self, "_stats_file", "")
             if not data and stats_file and os.path.exists(stats_file):
                 # 首次启用 SQLite：导入旧的 config/app_stats.json，原文件改名备份
-                with open(stats_file, "r", encoding="utf-8") as f:
+                with open(stats_file, encoding="utf-8") as f:
                     legacy = json.load(f)
                 data = {
                     key: self._coerce_token_count(legacy.get(key, 0))
@@ -576,7 +574,7 @@ class RequestManager:
                 records = store.load_history(max_to_load)
             elif os.path.exists(self._history_file):
                 # R2-5 首次启用 SQLite：导入旧的 JSON 历史（兼容两种旧格式），原文件改名备份
-                with open(self._history_file, "r", encoding="utf-8") as f:
+                with open(self._history_file, encoding="utf-8") as f:
                     data = json.load(f)
                 # B2：旧版历史文件是顶层数组，必须先按类型分支再取值——
                 # 旧实现先调用 data.get(...)，list 没有 .get 直接抛错，兼容分支永远走不到，恢复 0 条。
@@ -606,7 +604,7 @@ class RequestManager:
                     self._sort_history_records(normalized_records)[-max_records:]
                     if max_records > 0 else []
                 )
-                
+
                 # 如果没有持久化的 token 统计，从已有的 200 条历史请求中求和做初次填充
                 if self.total_input_tokens == 0 and self.total_output_tokens == 0:
                     for record in self._monitor_history:
@@ -1703,7 +1701,6 @@ class RequestManager:
         detail_enabled = self._request_monitor_detail_enabled()
         with ctx._lock:
             for payload in payloads:
-                error = payload.get("error") if isinstance(payload, dict) else None
                 payload_error = self._extract_error_payload(payload)
                 text = "" if payload_error else self._extract_response_text(payload)
                 media_items = self._extract_media_items(payload)
@@ -2308,7 +2305,7 @@ class RequestManager:
             if id_match is not None:
                 return copy.deepcopy(id_match)
         return None
-    
+
     def create_request(self, client_fp: str = "") -> RequestContext:
         """创建新请求"""
         request_id = self._generate_id()
@@ -2343,15 +2340,15 @@ class RequestManager:
             logger.info(f"创建 (X-Request-ID={ctx.http_request_id})" if ctx.http_request_id else "创建")
         finally:
             _request_context.reset(token)
-        
+
         return ctx
-    
+
     def _generate_id(self) -> str:
         """生成简短的请求 ID"""
         with self._requests_lock:
             self._request_counter += 1
             return f"req-{self._request_counter:03d}"
-    
+
     def _cleanup_old_requests(self) -> List[RequestContext]:
         """清理旧请求（修复版：不因单个未完成请求阻塞所有清理）"""
         now = time.time()
@@ -2401,7 +2398,7 @@ class RequestManager:
         # 批量删除
         for req_id in to_delete:
             del self._requests[req_id]
-        
+
         if to_delete:
             logger.debug(f"清理了 {len(to_delete)} 个旧请求")
 
@@ -2449,7 +2446,7 @@ class RequestManager:
                 f"(status={ctx.status.value}, cancel_reason={ctx.cancel_reason or '-'})"
             )
         return True
-    
+
     def finish_request(self, ctx: RequestContext, success: bool = True):
         """标记请求结束"""
         with ctx._lock:
@@ -2536,7 +2533,7 @@ class RequestManager:
     def get_request(self, request_id: str) -> Optional[RequestContext]:
         with self._requests_lock:
             return self._requests.get(request_id)
-    
+
     def get_running_requests(self, tab_id: str = None) -> list:
         """获取所有正在执行的请求"""
         with self._requests_lock:
@@ -2594,7 +2591,7 @@ class RequestManager:
             if self.cancel_request(ctx.request_id, reason):
                 cancelled = True
         return cancelled
-    
+
     def force_release(self, tab_id: str = None) -> bool:
         """兼容旧接口 - 强制取消运行中的请求。传入 tab_id 时仅取消该标签页请求。"""
         return self.cancel_current("force_release", tab_id=tab_id)
@@ -2615,9 +2612,9 @@ async def watch_client_disconnect(request, ctx: RequestContext,
             if await request.is_disconnected():
                 ctx.request_cancel("client_disconnected")
                 break
-            
+
             await asyncio.sleep(check_interval)
-    
+
     except asyncio.CancelledError:
         pass
     except Exception as e:

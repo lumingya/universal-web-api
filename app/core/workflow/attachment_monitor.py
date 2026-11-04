@@ -12,9 +12,8 @@ import time
 from typing import Any, Callable, Dict, Iterable, Optional
 
 from app.core.config import BrowserConstants, logger
-from app.core.elements import ElementFinder
 from app.core.driver import driver_for_tab
-
+from app.core.elements import ElementFinder
 
 _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
 (() => {

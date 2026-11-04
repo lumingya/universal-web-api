@@ -8,12 +8,13 @@ app/utils/file_paste.py - 文件粘贴工具
 """
 
 import os
-import tempfile
 import shutil
+import tempfile
 import time
-from app.core.config import get_logger
 from pathlib import Path
 from typing import Optional
+
+from app.core.config import get_logger
 from app.utils.system_clipboard import (
     ClipboardDependencyError,
     ClipboardUnsupportedError,
@@ -146,11 +147,11 @@ def cleanup_temp_dir():
 def create_temp_txt(text: str, prefix: str = "paste_") -> Optional[str]:
     """
     将文本写入临时 txt 文件
-    
+
     Args:
         text: 要写入的文本内容
         prefix: 文件名前缀
-    
+
     Returns:
         文件的绝对路径，失败返回 None
     """
@@ -158,22 +159,22 @@ def create_temp_txt(text: str, prefix: str = "paste_") -> Optional[str]:
     filepath: Optional[str] = None
     try:
         ensure_temp_dir()
-        
+
         # 使用 tempfile 创建唯一文件名，放在项目的 temp 目录下
         fd, filepath = tempfile.mkstemp(
             suffix=".txt",
             prefix=prefix,
             dir=str(TEMP_DIR)
         )
-        
+
         # 写入内容（UTF-8 编码）
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             fd = None
             f.write(text)
-        
+
         logger.debug(f"临时文件已创建: {_temp_log_label(filepath)} ({len(text)} 字符)")
         return filepath
-    
+
     except Exception as e:
         if fd is not None:
             try:
@@ -346,13 +347,13 @@ def create_temp_file(text: str, prefix: str = "paste_", file_type: str = DEFAULT
 def copy_file_to_clipboard(filepath: str) -> bool:
     """
     将文件以 CF_HDROP 格式复制到系统剪贴板
-    
+
     这模拟了用户在文件管理器中「复制」文件的操作。
     之后在网页输入框中 Ctrl+V 即可粘贴文件。
-    
+
     Args:
         filepath: 文件的绝对路径
-    
+
     Returns:
         是否成功
     """
@@ -370,7 +371,7 @@ def copy_file_to_clipboard(filepath: str) -> bool:
         logger.info("当前平台不支持原生文件剪贴板，将依赖 file input / drop_zone 上传")
         return False
     except ClipboardDependencyError:
-        logger.error("缺少 Windows 原生文件剪贴板依赖，请执行: pip install pywin32")
+        logger.error("缺少 Windows 原生文件剪贴板依赖，请执行: uv sync（pywin32 已在 pyproject.toml 中声明）")
         return False
     except Exception as e:
         logger.error(f"复制文件到剪贴板失败: {e}")
@@ -384,17 +385,17 @@ def prepare_file_paste(text: str, file_type: str = DEFAULT_TEMP_FILE_TYPE) -> Op
     完整的文件粘贴准备流程：
     1. 创建临时 txt/pdf 文件
     2. 将文件复制到剪贴板
-    
+
     Args:
         text: 要粘贴的文本内容
-    
+
     Returns:
         临时文件路径（成功时），失败返回 None
     """
     filepath = create_temp_file(text, file_type=file_type)
     if not filepath:
         return None
-    
+
     if not copy_file_to_clipboard(filepath):
         # 清理失败的临时文件
         try:
@@ -402,7 +403,7 @@ def prepare_file_paste(text: str, file_type: str = DEFAULT_TEMP_FILE_TYPE) -> Op
         except Exception:
             pass
         return None
-    
+
     return filepath
 
 

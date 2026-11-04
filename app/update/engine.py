@@ -1,0 +1,1332 @@
+#!/usr/bin/env python3
+"""
+Universal Web-to-API 自动更新模块 v2.1
+修复：临时文件处理 + GitHub 重定向处理
+"""
+
+import fnmatch
+import hashlib
+import hmac
+import json
+import os
+import posixpath
+import re
+import shutil
+import ssl
+import stat
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+import zipfile
+from datetime import datetime
+from http.client import IncompleteRead
+from pathlib import Path, PurePosixPath
+from typing import Optional, Tuple
+from urllib.parse import urlparse
+
+from app.update.preserve import (
+    build_effective_preserve_patterns,
+    get_default_update_preserve_patterns,
+    load_update_preserve_settings,
+)
+
+# 项目根目录：本文件位于 <root>/app/update/engine.py
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# ============ 配置常量 ============
+GITHUB_API_BASE = "https://api.github.com/repos"
+GITHUB_DOWNLOAD_BASE = "https://github.com"
+DEFAULT_REPO = "lumingya/universal-web-api"
+
+# 网络配置
+MAX_RETRIES = 3
+RETRY_DELAY = 3
+CHUNK_SIZE = 8192
+API_TIMEOUT = 30
+DOWNLOAD_TIMEOUT = 300
+MAX_UPDATE_ARCHIVE_BYTES = 512 * 1024 * 1024
+MAX_UPDATE_MEMBER_COUNT = 20_000
+MAX_UPDATE_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
+MAX_UPDATE_COMPRESSION_RATIO = 200
+
+# 更新时保留的文件/目录
+DEFAULT_PRESERVE = get_default_update_preserve_patterns()
+
+SITES_CONFIG_PATH = Path("config") / "sites.json"
+# R1-2：站点配置目录（每站点一个文件）与内置适配器清单
+SITES_DIR_PATH = Path("config") / "sites"
+SITES_INDEX_PATH = SITES_DIR_PATH / "index.json"
+COMMANDS_CONFIG_PATH = Path("config") / "commands.json"
+COMMAND_PRESERVE_FIELDS = ("enabled", "group_name", "last_triggered", "trigger_count")
+BACKUP_EXCLUDE_NAMES = {
+    ".git",
+    ".update_temp",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "logs",
+    "temp",
+    "chrome_profile",
+}
+
+class Colors:
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    END = '\033[0m'
+    BOLD = '\033[1m'
+
+def colored(text: str, color: str) -> str:
+    if os.name == 'nt':
+        os.system('')
+    return f"{color}{text}{Colors.END}"
+
+def log_info(msg: str):
+    print(f"[{colored('INFO', Colors.CYAN)}] {msg}")
+
+def log_success(msg: str):
+    print(f"[{colored('OK', Colors.GREEN)}] {msg}")
+
+def log_warning(msg: str):
+    print(f"[{colored('WARN', Colors.YELLOW)}] {msg}")
+
+def log_error(msg: str):
+    print(f"[{colored('ERROR', Colors.RED)}] {msg}")
+
+def log_debug(msg: str):
+    if os.getenv('DEBUG', '').lower() in ('1', 'true', 'yes'):
+        print(f"[{colored('DEBUG', Colors.YELLOW)}] {msg}")
+
+def create_ssl_context():
+    """创建默认的 SSL 上下文，启用证书链和主机名校验。"""
+    return ssl.create_default_context()
+
+def get_opener():
+    """创建使用默认 TLS 校验的 opener。"""
+    https_handler = urllib.request.HTTPSHandler(context=create_ssl_context())
+    opener = urllib.request.build_opener(https_handler)
+    return opener
+
+def http_request_with_retry(url: str, headers: dict = None, timeout: int = API_TIMEOUT) -> Optional[bytes]:
+    """HTTP 请求，带重试机制"""
+    if headers is None:
+        headers = {}
+
+    headers.setdefault('User-Agent', 'Universal-Web-API-Updater/2.1')
+    gh_token = os.getenv('GITHUB_TOKEN', '').strip()
+    if gh_token and 'api.github.com' in url and 'Authorization' not in headers:
+        headers['Authorization'] = f'Bearer {gh_token}'
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            if attempt > 0:
+                log_info(f"重试请求 ({attempt + 1}/{MAX_RETRIES})...")
+                time.sleep(RETRY_DELAY)
+
+            req = urllib.request.Request(url, headers=headers)
+
+            opener = get_opener()
+            with opener.open(req, timeout=timeout) as response:
+                return response.read()
+
+        except IncompleteRead as e:
+            log_warning(f"数据读取不完整: {len(e.partial)} bytes")
+            if e.partial and len(e.partial) > 100:
+                return e.partial
+        except urllib.error.HTTPError as e:
+            log_error(f"HTTP {e.code}: {e.reason}")
+            if e.code == 404:
+                return None
+        except urllib.error.URLError as e:
+            log_error(f"网络错误: {e.reason}")
+        except Exception as e:
+            log_error(f"请求失败: {e}")
+
+    return None
+
+def normalize_version(version: str) -> str:
+    """标准化版本号格式"""
+    version = version.strip().lstrip('vV').strip()
+
+    match = re.match(r'^(\d+)\.(\d{2,})$', version)
+    if match:
+        major = match.group(1)
+        rest = match.group(2)
+        if len(rest) == 2:
+            version = f"{major}.{rest[0]}.{rest[1]}"
+
+    parts = version.split('.')
+    while len(parts) < 3:
+        parts.append('0')
+
+    result_parts = []
+    for p in parts[:3]:
+        try:
+            result_parts.append(str(int(p)))
+        except ValueError:
+            result_parts.append('0')
+
+    return '.'.join(result_parts)
+
+def get_current_version() -> str:
+    """获取当前版本号"""
+    version_file = PROJECT_ROOT / "VERSION"
+
+    if version_file.exists():
+        return normalize_version(version_file.read_text().strip())
+
+    env_file = PROJECT_ROOT / ".env"
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            if line.startswith("CURRENT_VERSION="):
+                return normalize_version(line.split("=", 1)[1].strip())
+
+    return "0.0.0"
+
+def parse_version(version: str) -> Tuple[int, ...]:
+    """解析版本号为元组"""
+    normalized = normalize_version(version)
+    try:
+        return tuple(int(p) for p in normalized.split('.')[:3])
+    except (ValueError, IndexError):
+        return (0, 0, 0)
+
+def compare_versions(v1: str, v2: str) -> int:
+    """比较版本号"""
+    p1 = parse_version(v1)
+    p2 = parse_version(v2)
+
+    if p1 > p2:
+        return 1
+    elif p1 < p2:
+        return -1
+    return 0
+
+def fetch_latest_release(repo: str) -> Optional[dict]:
+    """获取最新 Release 信息"""
+    api_url = f"{GITHUB_API_BASE}/{repo}/releases/latest"
+
+    log_info(f"请求 GitHub API: {api_url}")
+
+    data = http_request_with_retry(
+        api_url,
+        headers={'Accept': 'application/vnd.github.v3+json'}
+    )
+
+    if data:
+        try:
+            release_info = json.loads(data.decode('utf-8'))
+            log_debug(f"Release: tag={release_info.get('tag_name')}, assets={len(release_info.get('assets', []))}")
+            return release_info
+        except json.JSONDecodeError as e:
+            log_error(f"JSON 解析失败: {e}")
+
+    return None
+
+def get_release_zip_asset(release: dict, repo: str) -> Optional[dict]:
+    """Return the exact release ZIP asset with a GitHub-provided digest."""
+    if not isinstance(release, dict) or not repo:
+        log_error("Release 或 Repo 参数无效")
+        return None
+
+    tag_name = str(release.get('tag_name') or '').strip()
+    tag_clean = tag_name.lstrip('vV')
+    if not tag_clean:
+        log_error(f"Release 缺少有效的 tag_name: {tag_name!r}")
+        return None
+
+    candidate_names = {
+        f"universal-web-api-release-{tag_name}.zip",
+        f"universal-web-api-release-v{tag_clean}.zip",
+        f"universal-web-api-release-{tag_clean}.zip",
+    }
+    clean_repo = str(repo).strip('/')
+    expected_path_prefix = f"/{clean_repo}/releases/download/"
+    assets = release.get('assets', [])
+    if not isinstance(assets, list):
+        assets = []
+    log_info(f"Release 包含 {len(assets)} 个 Assets")
+
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        asset_name = str(asset.get('name') or '')
+        if asset_name not in candidate_names:
+            continue
+        download_url = str(asset.get('browser_download_url') or '').strip()
+        parsed = urlparse(download_url)
+        if parsed.scheme != 'https' or parsed.hostname != 'github.com':
+            log_error(f"Release Asset 下载地址不可信: {download_url}")
+            return None
+        normalized_path = posixpath.normpath(parsed.path)
+        if not normalized_path.startswith(expected_path_prefix):
+            log_error(f"Release Asset 不属于目标仓库: {parsed.path} (normalized: {normalized_path})")
+            return None
+        digest = str(asset.get('digest') or '').strip().lower()
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            log_error(f"Release Asset 缺少有效 SHA-256 摘要: {asset_name}")
+            return None
+        try:
+            size = int(asset.get('size') or 0)
+        except Exception:
+            size = 0
+        if size <= 0 or size > MAX_UPDATE_ARCHIVE_BYTES:
+            log_error(f"Release Asset 大小异常: {size}")
+            return None
+        return asset
+
+    log_error(f"未找到精确匹配的 Release Asset: 期望匹配 {', '.join(sorted(candidate_names))}")
+    return None
+
+
+def get_download_url_from_release(release: dict, repo: str) -> Tuple[Optional[str], str]:
+    """从 release 信息中获取经过元数据校验的下载 URL"""
+    asset = get_release_zip_asset(release, repo)
+    if not asset:
+        return (None, 'none')
+    name = str(asset.get('name') or '')
+    log_success(f"找到已校验元数据的 Release Asset: {name}")
+    return (str(asset.get('browser_download_url') or ''), 'asset')
+
+def download_file_robust(
+    url: str,
+    dest_path: Path,
+    *,
+    expected_sha256: str = "",
+    max_bytes: int = MAX_UPDATE_ARCHIVE_BYTES,
+) -> bool:
+    """
+    健壮的文件下载函数
+    修复：临时文件处理 + GitHub 重定向
+    """
+    log_info(f"下载 URL: {url}")
+
+    # 确保目标目录存在
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            if attempt > 0:
+                log_info(f"重试下载 ({attempt + 1}/{MAX_RETRIES})...")
+                time.sleep(RETRY_DELAY * attempt)  # 递增延迟
+
+            # 构建请求
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/octet-stream, application/zip, */*',
+            }
+            req = urllib.request.Request(url, headers=headers)
+
+            # 使用默认 TLS 校验与标准重定向处理
+            opener = get_opener()
+            response = opener.open(req, timeout=DOWNLOAD_TIMEOUT)
+
+            # 获取最终 URL（处理重定向后）
+            final_url = response.geturl()
+            if final_url != url:
+                log_info(f"重定向到: {final_url[:80]}...")
+
+            # 获取文件信息
+            total_size = int(response.headers.get('content-length', 0))
+            content_type = response.headers.get('content-type', 'unknown')
+            if total_size > max_bytes:
+                response.close()
+                log_error(f"更新包超过大小限制: {total_size:,} bytes")
+                return False
+
+            log_debug(f"Content-Type: {content_type}")
+            log_debug(f"Content-Length: {total_size}")
+
+            # 检查是否是 HTML（可能是错误页面）
+            if 'text/html' in content_type.lower():
+                log_warning("服务器返回 HTML，可能是错误页面")
+                # 仍然尝试下载，后面会验证
+
+            # 使用临时文件下载
+            temp_path = dest_path.parent / f".downloading_{dest_path.name}"
+            downloaded = 0
+            digest = hashlib.sha256()
+
+            try:
+                with open(temp_path, 'wb') as f:
+                    while True:
+                        try:
+                            chunk = response.read(CHUNK_SIZE)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                            digest.update(chunk)
+                            downloaded += len(chunk)
+                            if downloaded > max_bytes:
+                                raise ValueError(f"更新包超过大小限制: {downloaded:,} bytes")
+
+                            # 显示进度
+                            if total_size > 0:
+                                percent = min(100, downloaded * 100 // total_size)
+                                bar_len = 30
+                                filled = int(bar_len * percent / 100)
+                                bar = '=' * filled + '-' * (bar_len - filled)
+                                size_mb = downloaded / 1024 / 1024
+                                total_mb = total_size / 1024 / 1024
+                                print(f"\r    [{bar}] {percent:3d}% ({size_mb:.2f}/{total_mb:.2f} MB)", end='', flush=True)
+                            else:
+                                size_kb = downloaded / 1024
+                                print(f"\r    已下载: {size_kb:.1f} KB", end='', flush=True)
+
+                        except IncompleteRead as e:
+                            if e.partial:
+                                f.write(e.partial)
+                                digest.update(e.partial)
+                                downloaded += len(e.partial)
+                            log_warning(f"\n读取中断，已下载 {downloaded} bytes")
+                            break
+
+                print()  # 换行
+                response.close()
+
+            except Exception as e:
+                log_error(f"写入文件失败: {e}")
+                if temp_path.exists():
+                    temp_path.unlink()
+                continue
+
+            # 检查下载的文件
+            if not temp_path.exists():
+                log_error("临时文件不存在")
+                continue
+
+            actual_size = temp_path.stat().st_size
+            log_info(f"下载完成: {actual_size:,} bytes")
+
+            expected_digest = str(expected_sha256 or '').strip().lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+                log_error("缺少可信的更新包 SHA-256，拒绝安装")
+                temp_path.unlink()
+                return False
+            actual_digest = digest.hexdigest()
+            if not hmac.compare_digest(actual_digest, expected_digest):
+                log_error(
+                    f"更新包 SHA-256 校验失败: expected={expected_digest}, actual={actual_digest}"
+                )
+                temp_path.unlink()
+                return False
+            log_success(f"更新包 SHA-256 校验通过: {actual_digest}")
+
+            # 检查文件大小
+            if actual_size < 1000:
+                log_error(f"文件太小，可能是错误响应")
+                # 显示文件内容
+                try:
+                    with open(temp_path, encoding='utf-8', errors='ignore') as f:
+                        content = f.read(500)
+                    log_error(f"文件内容: {content[:200]}")
+                except:
+                    pass
+                temp_path.unlink()
+                continue
+
+            if total_size > 0 and actual_size < total_size * 0.9:
+                log_warning(f"文件可能不完整: {actual_size}/{total_size}")
+                temp_path.unlink()
+                continue
+
+            # 检查文件类型（魔数）
+            with open(temp_path, 'rb') as f:
+                header = f.read(10)
+
+            log_debug(f"文件头 (hex): {header[:10].hex()}")
+
+            # ZIP: PK\x03\x04 或 PK\x05\x06 (空zip) 或 PK\x07\x08
+            if header[:2] == b'PK':
+                log_debug("检测到 ZIP 文件格式")
+            elif header[:2] == b'\x1f\x8b':
+                log_debug("检测到 GZIP 文件格式")
+            elif header[:5] == b'<!DOC' or header[:5] == b'<html' or header[:5] == b'<HTML':
+                log_error("下载的是 HTML 页面！")
+                try:
+                    with open(temp_path, encoding='utf-8', errors='ignore') as f:
+                        html_content = f.read(500)
+                    if 'Not Found' in html_content:
+                        log_error("GitHub 返回 404 Not Found")
+                    elif 'rate limit' in html_content.lower():
+                        log_error("GitHub API 速率限制")
+                    else:
+                        log_error(f"HTML 内容: {html_content[:200]}")
+                except:
+                    pass
+                temp_path.unlink()
+                continue
+
+            # 验证 ZIP 完整性
+            try:
+                with zipfile.ZipFile(temp_path, 'r') as zf:
+                    # 测试 ZIP 完整性
+                    bad_file = zf.testzip()
+                    if bad_file:
+                        log_error(f"ZIP 文件损坏: {bad_file}")
+                        temp_path.unlink()
+                        continue
+
+                    file_list = zf.namelist()
+                    log_info(f"ZIP 包含 {len(file_list)} 个文件")
+
+                    if len(file_list) == 0:
+                        log_error("ZIP 文件为空")
+                        temp_path.unlink()
+                        continue
+
+                    # 显示前几个文件
+                    for f in file_list[:3]:
+                        log_debug(f"  - {f}")
+
+            except zipfile.BadZipFile as e:
+                log_error(f"不是有效的 ZIP 文件: {e}")
+                # 显示文件开头内容用于调试
+                try:
+                    with open(temp_path, 'rb') as f:
+                        start = f.read(100)
+                    log_debug(f"文件开头: {start[:50]}")
+                except:
+                    pass
+                temp_path.unlink()
+                continue
+
+            # 一切正常，移动到目标位置
+            if dest_path.exists():
+                dest_path.unlink()
+            shutil.move(str(temp_path), str(dest_path))
+
+            log_success(f"文件保存到: {dest_path.name}")
+            return True
+
+        except urllib.error.HTTPError as e:
+            print()
+            log_error(f"HTTP 错误 {e.code}: {e.reason}")
+            if e.code == 404:
+                log_error("文件不存在，请检查 Release Asset 是否已上传")
+                return False  # 404 不需要重试
+            elif e.code == 403:
+                log_error("访问被拒绝，可能是 GitHub 速率限制")
+        except urllib.error.URLError as e:
+            print()
+            log_error(f"URL 错误: {e.reason}")
+        except Exception as e:
+            print()
+            log_error(f"下载错误: {type(e).__name__}: {e}")
+            import traceback
+            log_debug(traceback.format_exc())
+
+        # 清理临时文件
+        temp_path = dest_path.parent / f".downloading_{dest_path.name}"
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except:
+                pass
+
+    return False
+
+def _iter_project_backup_items(project_dir: Path, backup_dir: Optional[Path] = None) -> list[Path]:
+    items = []
+    backup_name = backup_dir.name if backup_dir else ""
+    for item in project_dir.iterdir():
+        name = item.name
+        if name in BACKUP_EXCLUDE_NAMES:
+            continue
+        if backup_name and name == backup_name:
+            continue
+        if name.startswith("backup_"):
+            continue
+        items.append(item)
+    return items
+
+def backup_current(project_dir: Path) -> Optional[Path]:
+    """备份当前项目快照，便于更新失败后回滚。"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir = project_dir / f"backup_{timestamp}"
+
+    try:
+        backup_dir.mkdir(exist_ok=True)
+        backup_items = _iter_project_backup_items(project_dir, backup_dir)
+
+        count = 0
+        for src in backup_items:
+            if src.exists():
+                dst = backup_dir / src.name
+                if src.is_dir():
+                    shutil.copytree(src, dst)
+                else:
+                    shutil.copy2(src, dst)
+                count += 1
+
+        if count > 0:
+            log_success(f"已备份 {count} 项到: {backup_dir.name}")
+            return backup_dir
+        else:
+            backup_dir.rmdir()
+            return None
+    except Exception as e:
+        log_warning(f"备份失败: {e}")
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir, ignore_errors=True)
+        return None
+
+def _remove_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+def restore_from_backup(project_dir: Path, backup_dir: Optional[Path]) -> bool:
+    """从备份目录恢复项目快照。"""
+    if not backup_dir or not backup_dir.exists():
+        log_error("没有可用备份，无法回滚")
+        return False
+
+    try:
+        restore_items = [item for item in backup_dir.iterdir()]
+        restore_names = {item.name for item in restore_items}
+
+        # A failed update may have created new top-level files or directories.
+        # Remove them before restoring the snapshot, while retaining runtime
+        # directories that are deliberately excluded from backups.
+        for current in _iter_project_backup_items(project_dir, backup_dir):
+            if current.name not in restore_names:
+                _remove_path(current)
+
+        restored = 0
+        for src in restore_items:
+            if not src.exists():
+                continue
+
+            dst = project_dir / src.name
+            if dst.exists():
+                _remove_path(dst)
+
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if src.is_dir():
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
+            restored += 1
+
+        if restored <= 0:
+            log_error(f"备份目录中没有可恢复项目: {backup_dir}")
+            return False
+
+        log_success(f"已从备份回滚 {restored} 项: {backup_dir.name}")
+        return True
+    except Exception as e:
+        log_error(f"回滚失败: {e}")
+        return False
+
+def should_preserve(path: Path, preserve_patterns: list) -> bool:
+    """检查是否应保留"""
+    path_str = str(path).replace("\\", "/").strip("/")
+    name = Path(path_str).name
+
+    for raw_pattern in preserve_patterns:
+        pattern = str(raw_pattern or "").replace("\\", "/").strip().strip("/")
+        if not pattern:
+            continue
+        if any(char in pattern for char in "*?["):
+            if fnmatch.fnmatchcase(path_str, pattern) or fnmatch.fnmatchcase(name, pattern):
+                return True
+            continue
+        if path_str == pattern or path_str.startswith(pattern + "/"):
+            return True
+
+    return False
+
+def load_commands_config(path: Path) -> list:
+    """加载命令配置，兼容 list 和 {commands: [...]} 两种格式"""
+    if not path.exists():
+        return []
+
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+
+        if isinstance(data, dict):
+            data = data.get("commands", [])
+
+        if isinstance(data, list):
+            return [cmd for cmd in data if isinstance(cmd, dict)]
+
+        raise ValueError(f"命令配置格式无效: {path}")
+    except Exception as e:
+        raise RuntimeError(f"加载命令配置失败: {path} ({e})") from e
+
+def load_sites_config(path: Path) -> dict:
+    """加载站点配置。解析失败时中断合并，避免误覆盖本地数据。"""
+    if not path.exists():
+        return {}
+
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+        raise ValueError(f"站点配置格式无效: {path}")
+    except Exception as e:
+        raise RuntimeError(f"加载站点配置失败: {path} ({e})") from e
+
+def merge_site_records(existing: dict, incoming: dict) -> dict:
+    """递归合并站点配置，优先保留用户本地值。"""
+    if not isinstance(incoming, dict):
+        return dict(existing) if isinstance(existing, dict) else {}
+    if not isinstance(existing, dict):
+        return dict(incoming)
+
+    merged = dict(incoming)
+    for key, existing_value in existing.items():
+        incoming_value = merged.get(key)
+        if isinstance(existing_value, dict) and isinstance(incoming_value, dict):
+            merged[key] = merge_site_records(existing_value, incoming_value)
+        else:
+            merged[key] = existing_value
+    return merged
+
+def merge_sites(existing: dict, incoming: dict) -> tuple[dict, dict]:
+    """
+    合并站点配置。
+
+    - 相同站点：优先保留本地配置，并补入发布版新增字段
+    - 本地独有站点：保留
+    - 发布版独有站点：新增
+    """
+    existing_sites = existing if isinstance(existing, dict) else {}
+    incoming_sites = incoming if isinstance(incoming, dict) else {}
+
+    merged = {}
+    updated = 0
+    added = 0
+    preserved = 0
+
+    incoming_keys = list(incoming_sites.keys())
+    for key in incoming_keys:
+        incoming_value = incoming_sites.get(key)
+        if key in existing_sites:
+            merged[key] = merge_site_records(existing_sites[key], incoming_value)
+            updated += 1
+        else:
+            merged[key] = incoming_value
+            added += 1
+
+    for key, existing_value in existing_sites.items():
+        if key in merged:
+            continue
+        merged[key] = existing_value
+        preserved += 1
+
+    return merged, {
+        "updated": updated,
+        "added": added,
+        "preserved": preserved,
+    }
+
+def _site_config_sha256(config) -> str:
+    """与 scripts/build_sites_index.py / site_store.canonical_config_text 相同的规范化摘要。"""
+    text = json.dumps(config, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def load_site_index(path: Path) -> dict:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def is_site_file(rel_path: Path) -> bool:
+    return rel_path.parent == SITES_DIR_PATH and rel_path.suffix == ".json" and rel_path.name != SITES_INDEX_PATH.name
+
+
+def merge_site_file(src_path: Path, dst_path: Path, old_index: dict) -> str:
+    """合并单个站点文件（R1-2 / R1-3），返回 added / replaced / merged。
+
+    - 本地没有：直接新增；
+    - 本地配置与上一个发布版清单（旧 index.json）里的 config_sha256 一致，说明用户没改过：整体替换为新版；
+    - 用户改过：沿用 merge_site_records 语义，保留本地值并补入发布版新增字段；
+    - 本地文件无法解析：先另存备份，再替换为新版。
+    """
+    incoming = json.loads(src_path.read_text(encoding="utf-8-sig"))
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    if not dst_path.exists():
+        shutil.copy2(src_path, dst_path)
+        return "added"
+    try:
+        existing = json.loads(dst_path.read_text(encoding="utf-8-sig"))
+        existing_config = existing["config"]
+    except Exception:
+        backup = dst_path.with_name(dst_path.name + f".unreadable-{time.strftime('%Y%m%d-%H%M%S')}.bak")
+        shutil.copy2(dst_path, backup)
+        shutil.copy2(src_path, dst_path)
+        log_warning(f"本地站点文件无法解析，已备份为 {backup.name} 并替换为新版")
+        return "replaced"
+    site = incoming.get("site")
+    old_entry = ((old_index or {}).get("sites") or {}).get(site) or {}
+    if old_entry.get("config_sha256") and _site_config_sha256(existing_config) == old_entry["config_sha256"]:
+        shutil.copy2(src_path, dst_path)
+        return "replaced"
+    payload = dict(incoming)
+    payload["config"] = merge_site_records(existing_config, incoming.get("config") or {})
+    with open(dst_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    return "merged"
+
+
+def merge_sites_file(src_path: Path, dst_path: Path):
+    """合并站点配置文件，优先保留用户已有站点配置。"""
+    incoming = load_sites_config(src_path)
+    existing = load_sites_config(dst_path)
+    merged, stats = merge_sites(existing, incoming)
+    had_existing = dst_path.exists()
+
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(dst_path, 'w', encoding='utf-8') as f:
+        json.dump(merged, f, indent=2, ensure_ascii=False)
+
+    if had_existing:
+        log_info(
+            "站点配置已合并: "
+            f"覆盖 {stats['updated']} 个已有站点，"
+            f"新增 {stats['added']} 个发布站点，"
+            f"保留 {stats['preserved']} 个本地站点"
+        )
+    else:
+        log_info(f"站点配置已写入: {len(merged)} 项")
+
+def _same_command(left: dict, right: dict) -> bool:
+    """判断两条命令是否代表同一个内置命令。"""
+    left_id = str(left.get("id", "")).strip()
+    right_id = str(right.get("id", "")).strip()
+    if left_id and right_id:
+        return left_id == right_id
+
+    left_name = str(left.get("name", "")).strip()
+    right_name = str(right.get("name", "")).strip()
+    return bool(left_name and right_name and left_name == right_name)
+
+def _merge_command_record(existing: dict, incoming: dict) -> dict:
+    """以发布版命令为准，保留本地运行状态与分组状态。"""
+    merged = dict(incoming)
+    for field in COMMAND_PRESERVE_FIELDS:
+        if field in existing:
+            merged[field] = existing[field]
+    return merged
+
+def merge_commands(existing: list, incoming: list) -> tuple[list, dict]:
+    """
+    合并命令配置。
+
+    - 发布版内置命令：用新版本覆盖旧版本
+    - 本地自定义命令：若发布版中不存在，则保留
+    """
+    existing_commands = [cmd for cmd in (existing or []) if isinstance(cmd, dict)]
+    incoming_commands = [cmd for cmd in (incoming or []) if isinstance(cmd, dict)]
+
+    merged = []
+    matched_existing = set()
+    updated = 0
+    added = 0
+    preserved = 0
+
+    for incoming_cmd in incoming_commands:
+        match_index = None
+        for index, existing_cmd in enumerate(existing_commands):
+            if index in matched_existing:
+                continue
+            if _same_command(existing_cmd, incoming_cmd):
+                match_index = index
+                break
+
+        if match_index is None:
+            merged.append(dict(incoming_cmd))
+            added += 1
+            continue
+
+        merged.append(_merge_command_record(existing_commands[match_index], incoming_cmd))
+        matched_existing.add(match_index)
+        updated += 1
+
+    for index, existing_cmd in enumerate(existing_commands):
+        if index in matched_existing:
+            continue
+        merged.append(dict(existing_cmd))
+        preserved += 1
+
+    return merged, {
+        "updated": updated,
+        "added": added,
+        "preserved": preserved,
+    }
+
+def merge_command_file(src_path: Path, dst_path: Path):
+    """合并命令配置文件，更新内置命令并保留用户自定义命令"""
+    incoming = load_commands_config(src_path)
+    existing = load_commands_config(dst_path)
+    merged, stats = merge_commands(existing, incoming)
+    had_existing = dst_path.exists()
+
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(dst_path, 'w', encoding='utf-8') as f:
+        json.dump({"commands": merged}, f, indent=2, ensure_ascii=False)
+
+    if had_existing:
+        log_info(
+            "命令配置已合并: "
+            f"更新 {stats['updated']} 条内置命令，"
+            f"新增 {stats['added']} 条发布命令，"
+            f"保留 {stats['preserved']} 条本地命令"
+        )
+    else:
+        log_info(f"命令配置已写入: {len(merged)} 条")
+
+def _safe_extract_zip(zf: zipfile.ZipFile, destination: Path) -> None:
+    """Extract a ZIP without allowing members to escape *destination*."""
+    root = destination.resolve()
+
+    members = zf.infolist()
+    if len(members) > MAX_UPDATE_MEMBER_COUNT:
+        raise ValueError(f"更新包文件数量超过限制: {len(members)}")
+    total_uncompressed = sum(max(0, int(member.file_size or 0)) for member in members)
+    if total_uncompressed > MAX_UPDATE_UNCOMPRESSED_BYTES:
+        raise ValueError(f"更新包展开大小超过限制: {total_uncompressed}")
+
+    for member in members:
+        raw_name = member.filename.replace("\\", "/")
+        archive_path = PurePosixPath(raw_name)
+        parts = tuple(part for part in archive_path.parts if part not in ("", "."))
+
+        if (
+            not parts
+            or archive_path.is_absolute()
+            or ".." in parts
+            or any(":" in part for part in parts)
+        ):
+            raise ValueError(f"更新包包含不安全路径: {member.filename!r}")
+
+        unix_mode = member.external_attr >> 16
+        if stat.S_ISLNK(unix_mode):
+            raise ValueError(f"更新包包含不支持的符号链接: {member.filename!r}")
+        compressed_size = max(1, int(member.compress_size or 0))
+        if (
+            member.file_size > 1024 * 1024
+            and member.file_size / compressed_size > MAX_UPDATE_COMPRESSION_RATIO
+        ):
+            raise ValueError(f"更新包成员压缩比异常: {member.filename!r}")
+
+        target = (root / Path(*parts)).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"更新包路径越界: {member.filename!r}") from exc
+
+        if member.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(member, "r") as source, open(target, "wb") as output:
+            shutil.copyfileobj(source, output)
+
+def extract_and_update(zip_path: Path, project_dir: Path, preserve: list) -> bool:
+    """解压并更新"""
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            log_info("解压更新包...")
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                _safe_extract_zip(zf, temp_path)
+
+            # 找根目录
+            extracted = list(temp_path.iterdir())
+            log_debug(f"解压内容: {[e.name for e in extracted]}")
+
+            if len(extracted) == 1 and extracted[0].is_dir():
+                source_dir = extracted[0]
+                log_info(f"使用目录: {source_dir.name}")
+            else:
+                source_dir = temp_path
+
+            log_info("应用更新...")
+            updated = 0
+            skipped = 0
+            # 必须在拷贝新的 index.json 之前读出旧清单：据此判断用户是否改过各站点文件
+            old_site_index = load_site_index(project_dir / SITES_INDEX_PATH)
+            site_stats = {"added": 0, "replaced": 0, "merged": 0}
+
+            for src_item in source_dir.rglob('*'):
+                if src_item.is_dir():
+                    continue
+
+                rel_path = src_item.relative_to(source_dir)
+                dst_item = project_dir / rel_path
+
+                if should_preserve(rel_path, preserve):
+                    skipped += 1
+                    continue
+
+                if rel_path == SITES_CONFIG_PATH:
+                    merge_sites_file(src_item, dst_item)
+                    updated += 1
+                    continue
+                if is_site_file(rel_path):
+                    site_stats[merge_site_file(src_item, dst_item, old_site_index)] += 1
+                    updated += 1
+                    continue
+
+                if rel_path == COMMANDS_CONFIG_PATH:
+                    merge_command_file(src_item, dst_item)
+                    updated += 1
+                    continue
+
+                dst_item.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_item, dst_item)
+                updated += 1
+
+            if any(site_stats.values()):
+                log_info(
+                    f"站点配置: 新增 {site_stats['added']} 个, 未改动直接更新 {site_stats['replaced']} 个, "
+                    f"本地改过已合并 {site_stats['merged']} 个"
+                )
+            log_success(f"更新 {updated} 个文件, 保留 {skipped} 个")
+            return True
+
+    except Exception as e:
+        log_error(f"更新失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def update_version_file(project_dir: Path, new_version: str):
+    """更新版本文件"""
+    normalized = normalize_version(new_version)
+    version_file = project_dir / "VERSION"
+    version_file.write_text(normalized)
+    log_success(f"版本已更新: {normalized}")
+
+def _write_update_check_result(repo: str, release: Optional[dict]) -> None:
+    """只交接成功的检查；网络失败应让服务在启动时重试。"""
+    target = os.getenv("UWAPI_UPDATE_CHECK_RESULT_FILE")
+    if not target or not release or not release.get("tag_name"):
+        return
+    try:
+        Path(target).write_text(json.dumps({
+            "repo": repo,
+            "checked_at": time.time(),
+            "release": {key: release.get(key, "") for key in ("tag_name", "published_at")},
+        }), encoding="utf-8")
+    except OSError as exc:
+        log_warning(f"无法交接版本检查结果: {exc}")
+
+
+def check_and_update(repo: str = None, force: bool = False, preserve: list = None) -> bool:
+    """检查并执行更新"""
+    project_dir = PROJECT_ROOT
+
+    if repo is None:
+        repo = os.getenv('GITHUB_REPO', DEFAULT_REPO)
+
+    if preserve is None:
+        preserve_str = os.getenv('UPDATE_PRESERVE', '')
+        if preserve_str:
+            preserve = build_effective_preserve_patterns([p.strip() for p in preserve_str.split(',')])
+        else:
+            preserve = build_effective_preserve_patterns(
+                load_update_preserve_settings().get("selected_patterns", DEFAULT_PRESERVE.copy())
+            )
+
+    print()
+    print("=" * 55)
+    print("  Universal Web-to-API Auto Updater v2.1")
+    print("=" * 55)
+    print()
+
+    current_version = get_current_version()
+    log_info(f"当前版本: v{current_version}")
+    log_info(f"检查仓库: {repo}")
+
+    release = fetch_latest_release(repo)
+    _write_update_check_result(repo, release)
+
+    if not release:
+        log_warning("无法获取版本信息")
+        print()
+        return False
+
+    latest_raw = release.get('tag_name', 'v0.0.0')
+    latest_version = normalize_version(latest_raw)
+    log_info(f"最新版本: v{latest_version} (tag: {latest_raw})")
+
+    if not force and compare_versions(current_version, latest_version) >= 0:
+        log_success("已是最新版本")
+        print()
+        return False
+
+    print()
+    print(colored(f"  >>> 发现新版本: v{current_version} -> v{latest_version}", Colors.YELLOW))
+    print()
+
+    # 显示更新说明
+    notes = release.get('body', '')
+    if notes:
+        print("  [更新说明]")
+        for line in notes.split('\n')[:10]:
+            print(f"    {line}")
+        print()
+
+    # 获取带可信摘要的精确 Release Asset
+    asset = get_release_zip_asset(release, repo)
+    download_url = str((asset or {}).get('browser_download_url') or '')
+    source_type = 'asset' if asset else 'none'
+    expected_sha256 = str((asset or {}).get('digest') or '').split(':', 1)[-1]
+
+    if not download_url or not expected_sha256:
+        log_error("无法获取下载链接")
+        return False
+
+    print()
+    log_info(f"下载来源: {source_type}")
+    log_info("开始下载...")
+    print()
+
+    # 创建临时目录用于下载
+    download_dir = project_dir / ".update_temp"
+    download_dir.mkdir(exist_ok=True)
+
+    zip_path = download_dir / "update.zip"
+
+    backup_dir = None
+    try:
+        if not download_file_robust(
+            download_url,
+            zip_path,
+            expected_sha256=expected_sha256,
+        ):
+            log_error("下载失败")
+            return False
+
+        print()
+        backup_dir = backup_current(project_dir)
+        if backup_dir is None:
+            log_error("更新前备份失败，已中止更新")
+            return False
+
+        if not extract_and_update(zip_path, project_dir, preserve):
+            restore_from_backup(project_dir, backup_dir)
+            return False
+
+        update_version_file(project_dir, latest_version)
+
+        print()
+        print("=" * 55)
+        print(colored(f"  ✓ 已成功更新到 v{latest_version}", Colors.GREEN))
+        print("=" * 55)
+        print()
+
+        return True
+    except Exception:
+        if backup_dir is not None:
+            restore_from_backup(project_dir, backup_dir)
+        raise
+
+    finally:
+        # 清理临时目录
+        if download_dir.exists():
+            try:
+                shutil.rmtree(download_dir)
+            except:
+                pass
+
+def fetch_all_releases(repo: str, per_page: int = 30) -> list:
+    """获取所有 Release 列表"""
+    api_url = f"{GITHUB_API_BASE}/{repo}/releases?per_page={per_page}"
+    log_info(f"请求 GitHub Release 列表: {api_url}")
+    data = http_request_with_retry(
+        api_url,
+        headers={'Accept': 'application/vnd.github.v3+json'}
+    )
+    if data:
+        try:
+            releases = json.loads(data.decode('utf-8'))
+            if isinstance(releases, list):
+                return releases
+        except json.JSONDecodeError as e:
+            log_error(f"JSON 解析失败: {e}")
+    return []
+
+
+def fetch_release_by_tag(repo: str, tag: str) -> Optional[dict]:
+    """按 tag 名称获取特定 Release 信息"""
+    api_url = f"{GITHUB_API_BASE}/{repo}/releases/tags/{tag}"
+    log_info(f"请求 Release by tag: {api_url}")
+    data = http_request_with_retry(
+        api_url,
+        headers={'Accept': 'application/vnd.github.v3+json'}
+    )
+    if data:
+        try:
+            return json.loads(data.decode('utf-8'))
+        except json.JSONDecodeError as e:
+            log_error(f"JSON 解析失败: {e}")
+    return None
+
+
+def update_to_version(tag: str, repo: str = None, preserve: list = None) -> bool:
+    """切换到指定版本（通过 tag 名称）"""
+    project_dir = PROJECT_ROOT
+
+    if repo is None:
+        repo = os.getenv('GITHUB_REPO', DEFAULT_REPO)
+
+    if preserve is None:
+        preserve_str = os.getenv('UPDATE_PRESERVE', '')
+        if preserve_str:
+            preserve = build_effective_preserve_patterns(
+                [p.strip() for p in preserve_str.split(',')]
+            )
+        else:
+            preserve = build_effective_preserve_patterns(
+                load_update_preserve_settings().get("selected_patterns", DEFAULT_PRESERVE.copy())
+            )
+
+    print()
+    print("=" * 55)
+    print(f"  切换到版本: {tag}")
+    print("=" * 55)
+    print()
+
+    current_version = get_current_version()
+    log_info(f"当前版本: v{current_version}")
+    log_info(f"目标版本: {tag}")
+
+    release = fetch_release_by_tag(repo, tag)
+    if not release:
+        log_error(f"无法获取版本 {tag} 的 Release 信息")
+        return False
+
+    asset = get_release_zip_asset(release, repo)
+    download_url = str((asset or {}).get('browser_download_url') or '')
+    source_type = 'asset' if asset else 'none'
+    expected_sha256 = str((asset or {}).get('digest') or '').split(':', 1)[-1]
+    if not download_url or not expected_sha256:
+        log_error("无法获取下载链接")
+        return False
+
+    log_info(f"下载来源: {source_type}")
+    log_info("开始下载...")
+    print()
+
+    download_dir = project_dir / ".update_temp"
+    download_dir.mkdir(exist_ok=True)
+    zip_path = download_dir / "update.zip"
+
+    backup_dir = None
+    try:
+        if not download_file_robust(
+            download_url,
+            zip_path,
+            expected_sha256=expected_sha256,
+        ):
+            log_error("下载失败")
+            return False
+
+        print()
+        backup_dir = backup_current(project_dir)
+        if backup_dir is None:
+            log_error("切换版本前备份失败，已中止操作")
+            return False
+
+        if not extract_and_update(zip_path, project_dir, preserve):
+            restore_from_backup(project_dir, backup_dir)
+            return False
+
+        # 写入目标版本号
+        target_version = normalize_version(tag)
+        update_version_file(project_dir, target_version)
+
+        print()
+        print("=" * 55)
+        print(colored(f"  ✓ 已成功切换到 {tag}", Colors.GREEN))
+        print("=" * 55)
+        print()
+
+        return True
+    except Exception:
+        if backup_dir is not None:
+            restore_from_backup(project_dir, backup_dir)
+        raise
+
+    finally:
+        if download_dir.exists():
+            try:
+                shutil.rmtree(download_dir)
+            except Exception:
+                pass
+
+
+def main():
+
+    """命令行入口"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description='自动更新工具 v2.1')
+    parser.add_argument('--force', '-f', action='store_true', help='强制更新')
+    parser.add_argument('--repo', '-r', type=str, help='GitHub 仓库')
+    parser.add_argument('--check-only', '-c', action='store_true', help='仅检查')
+    parser.add_argument('--version', '-v', action='store_true', help='显示版本')
+    parser.add_argument('--debug', '-d', action='store_true', help='调试模式')
+
+    args = parser.parse_args()
+
+    if args.debug:
+        os.environ['DEBUG'] = '1'
+
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
+    if args.version:
+        print(f"v{get_current_version()}")
+        sys.exit(0)
+
+    if args.check_only:
+        current = get_current_version()
+        release = fetch_latest_release(args.repo or os.getenv('GITHUB_REPO', DEFAULT_REPO))
+
+        if release:
+            latest = normalize_version(release.get('tag_name', '0'))
+
+            print(f"\n[Release 信息]")
+            print(f"  Tag: {release.get('tag_name')}")
+            assets = release.get('assets', [])
+            print(f"  Assets: {len(assets)} 个")
+            for asset in assets:
+                size_kb = asset.get('size', 0) / 1024
+                print(f"    - {asset.get('name')} ({size_kb:.1f} KB)")
+            print()
+
+            if compare_versions(current, latest) < 0:
+                print(f"可更新: v{current} -> v{latest}")
+                sys.exit(1)
+            else:
+                print(f"已是最新: v{current}")
+                sys.exit(0)
+        else:
+            print("检查失败")
+            sys.exit(2)
+
+    updated = check_and_update(repo=args.repo, force=args.force)
+    sys.exit(0 if updated else 1)
+
+if __name__ == '__main__':
+    main()

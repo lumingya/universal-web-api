@@ -10,10 +10,10 @@ import time
 from typing import Any, Dict, List, Optional
 
 from app.core.config import logger
+from app.core.driver import browser_driver
 
 from ._utils import _looks_like_transient_local_debug_error
 from .session import TabSession, TabStatus
-from app.core.driver import browser_driver
 
 
 class TabPoolContextMixin:

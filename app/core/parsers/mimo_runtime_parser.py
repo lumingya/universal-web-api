@@ -1,5 +1,5 @@
 """
-mimo_parser.py - Xiaomi MiMo SSE response parser.
+mimo_runtime_parser.py - Xiaomi MiMo SSE response parser.
 
 Observed stream traits:
 - POST /open-apis/bot/chat?... returns text/event-stream
@@ -14,6 +14,7 @@ import json
 from typing import Any, Dict, List, Tuple
 
 from app.core.config import logger
+
 from .base import ResponseParser
 
 

@@ -1,5 +1,5 @@
-import base64
 import asyncio
+import base64
 import io
 import json
 import subprocess
@@ -19,7 +19,6 @@ from app.core.background_image_downloader import (
 from app.core.browser import media as browser_media_module
 from app.core.browser.media import BrowserMediaMixin
 from app.core.network_monitor import NetworkMonitor
-from app.core.parsers.lmarena_parser import LmarenaParser
 from app.core.parsers.lmarena_battle_side_parser import (
     LmarenaBattleSideLeftParser,
     LmarenaBattleSideRightParser,
@@ -27,12 +26,13 @@ from app.core.parsers.lmarena_battle_side_parser import (
 )
 from app.core.parsers.lmarena_image_side_left_parser import LmarenaImageSideLeftParser
 from app.core.parsers.lmarena_image_side_right_parser import LmarenaImageSideRightParser
+from app.core.parsers.lmarena_parser import LmarenaParser
 from app.core.parsers.lmarena_side_left_parser import LmarenaSideLeftParser
+from app.core.tab_pool_parts.manager import TabPoolManager
 from app.core.tab_pool_parts.network import (
     _GlobalNetworkInterceptionManager,
     _GlobalNetworkWorker,
 )
-from app.core.tab_pool_parts.manager import TabPoolManager
 from app.core.tab_pool_parts.session import TabSession
 from app.services import request_lifecycle
 from app.services.request_lifecycle import (
@@ -44,7 +44,6 @@ from app.utils import image_handler
 from app.utils.image_handler import extract_images_from_messages
 from app.utils.remote_resource import UnsafeRemoteResourceError, validate_public_remote_url
 from app.utils.site_url import normalize_exact_tab_url
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -896,6 +895,7 @@ def test_non_public_image_downloads_remain_partitioned_by_browser_identity():
 
 def test_cross_origin_media_fetch_drops_cookies_and_referer(monkeypatch):
     from requests.cookies import RequestsCookieJar
+
     from app.utils import remote_resource
 
     calls = []
@@ -1057,10 +1057,12 @@ def _selector_test_session(index, tab, status="idle", domain="arena.ai"):
 
 def _patch_selector_test_helpers(monkeypatch, browser):
     from app.api import system
+    from app.api.system import diagnostics as system_diag
+    from app.api.system import runtime as system_runtime
 
-    monkeypatch.setattr(system, "get_browser", lambda: browser)
-    monkeypatch.setattr(system, "_collect_selector_test_element_snapshot", lambda _element: {})
-    monkeypatch.setattr(system, "_build_selector_top_candidates", lambda _elements: [])
+    monkeypatch.setattr(system_runtime, "get_browser", lambda: browser)
+    monkeypatch.setattr(system_diag, "_collect_selector_test_element_snapshot", lambda _element: {})
+    monkeypatch.setattr(system_diag, "_build_selector_top_candidates", lambda _elements: [])
     return system
 
 

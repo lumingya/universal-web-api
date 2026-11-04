@@ -1,32 +1,53 @@
 """
 main.py - FastAPI 应用入口
+
+启动方式（环境由 uv 管理）：
+
+    uv sync
+    uv run python main.py
+
+作为脚本运行时，会在导入应用代码之前完成环境校验、自动更新、DrissionPage
+补丁、浏览器配置清理与受控浏览器拉起（app/runtime/bootstrap.py）。
 """
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+if __name__ == "__main__":
+    # 关键：必须在导入 app / DrissionPage 之前执行，确保补丁对新代码生效。
+    from app.runtime.bootstrap import bootstrap_runtime
+
+    bootstrap_runtime()
+
 import asyncio
 import logging
+
 logging.getLogger("urllib3").setLevel(logging.WARNING)
-import os
-import logging
-import socket
 import mimetypes
 import shutil
 import subprocess
-import sys
 import threading
 import time
 import webbrowser
+from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 from urllib.request import urlopen
-from pathlib import Path
-from contextlib import asynccontextmanager
-from app import __version__ as APP_VERSION
-from app.core import get_browser
+
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse, Response
-# ================= 导入配置 =================
 
+from app import __version__ as APP_VERSION
+from app import paths
+from app.core import get_browser
+
+# ================= 导入配置 =================
 from app.core.config import AppConfig, get_logger, get_shared_file_log_handler
 from app.services.restart_guard import RestartGuard
 
@@ -68,13 +89,10 @@ def _get_scheduled_restart_active_work() -> int:
 
 
 def _exit_for_scheduled_restart() -> None:
-    try:
-        from app.services.restart_guard import mark_service_restart
-        mark_service_restart()
-    except Exception:
-        pass
     logger.warning("定时守护已排空工作流，服务将重启（浏览器和标签页保持不变）")
-    os._exit(3)
+    from app.runtime.relaunch import restart_service
+
+    restart_service()
 
 def _setup_windows_event_loop_policy():
     """
@@ -214,6 +232,7 @@ def _has_existing_meaningful_pages(browser) -> bool:
         return False
 
     from urllib.parse import urlparse
+
     from app.utils.site_url import extract_remote_site_domain
 
     base_url = _get_local_startup_base_url().lower()
@@ -413,10 +432,11 @@ def _resolve_dashboard_path():
         if configured_path.is_absolute():
             candidates.append(configured_path)
         else:
-            candidates.append(configured_path)
-            candidates.append(Path("static") / configured_path)
+            # 相对路径一律按项目根目录解析，避免受启动时工作目录影响
+            candidates.append(paths.PROJECT_ROOT / configured_path)
+            candidates.append(paths.STATIC_DIR / configured_path)
 
-    candidates.append(Path("static/index.html"))
+    candidates.append(paths.STATIC_DIR / "index.html")
 
     seen = set()
     for candidate in candidates:
@@ -476,7 +496,7 @@ async def lifespan(app: FastAPI):
         logger.info("[startup] 以浏览器 worker 角色运行（仅供本机 API 进程调用）")
     _install_asyncio_exception_filter()
     logger.info("=" * 60)
-    logger.info("Universal Web-to-API 服务启动中...")       
+    logger.info("Universal Web-to-API 服务启动中...")
     # 启动时清理临时文件目录与调试日志目录
     try:
         from app.utils.file_paste import cleanup_temp_dir
@@ -512,7 +532,7 @@ async def lifespan(app: FastAPI):
         try:
             browser = get_browser(auto_connect=False)
             health = await asyncio.to_thread(browser.health_check)
-    
+
             if health["connected"]:
                 startup_blank_tab_id = _capture_startup_blank_tab_id(browser)
                 if is_restart:
@@ -550,7 +570,7 @@ async def lifespan(app: FastAPI):
                     logger.info(f"✅ 浏览器已连接 (检测到 {existing_tab_count} 个现有网页，跳过教程)")
             else:
                 logger.warning(f"⚠️ 浏览器未连接: {health.get('error', '未知')}")
-        
+
         except Exception as e:
             logger.warning(f"⚠️ 浏览器检查跳过: {e}")
 
@@ -819,7 +839,7 @@ def _resolve_download_media_path(filename: str) -> Path:
     if not safe_name or safe_name != str(filename or ""):
         raise HTTPException(status_code=400, detail="invalid_media_filename")
 
-    base_dir = Path("download_images").resolve()
+    base_dir = paths.download_dir().resolve()
     path = (base_dir / safe_name).resolve()
     if base_dir not in path.parents or not path.is_file():
         raise HTTPException(status_code=404, detail="media_not_found")
@@ -955,31 +975,46 @@ async def media_file(
 # ================= 注册 API 路由（在 Dashboard 之后）=================
 
 from app.api import router as api_router
+
 app.include_router(api_router)
 
 # R2-6：worker 角色额外提供内部接口；API 进程模式下 /api/* 整体转发给 worker（中间件内按模式判断）
 from app.worker import is_worker_role as _is_worker_role
+
 if _is_worker_role():
     from app.worker.rpc_routes import router as worker_rpc_router
     app.include_router(worker_rpc_router)
 from app.worker.forwarding import WorkerForwardingMiddleware
+
 app.add_middleware(WorkerForwardingMiddleware)
 
 # R2-7：请求 ID 与 Prometheus 指标。最后注册 = 最外层，覆盖全部请求（纯 ASGI，不缓冲流式响应）
 from app.services.metrics import RequestMetricsMiddleware
+
 app.add_middleware(RequestMetricsMiddleware)
 
 
 # ================= 挂载静态文件 =================
 
-if Path("static").exists():
-    app.mount("/static", StaticFiles(directory="static"), name="static")
+if paths.STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(paths.STATIC_DIR)), name="static")
 
-# 🆕 挂载图片下载目录
-download_images_dir = Path("download_images")
-download_images_dir.mkdir(exist_ok=True)  # 自动创建目录
+# 🆕 挂载图片下载目录（绝对路径；目录在 paths.download_dir() 里按需创建）
+download_images_dir = paths.download_dir()
 class HardenedMediaStaticFiles(StaticFiles):
-    """S8/S9：/download_images 出口加固——非白名单扩展名强制下载，统一 nosniff + sandbox CSP。"""
+    """S8/S9：/download_images 出口加固——非白名单扩展名强制下载，统一 nosniff + sandbox CSP。
+
+    目录在每次请求时从 ``app.paths.download_dir()`` 重新解析：
+    媒体目录是运行时数据，测试会把它替换成临时目录，不能在 import 时固化成闭包值。
+    """
+
+    def _refresh_directories(self) -> None:
+        self.directory = str(paths.download_dir())
+        self.all_directories = self.get_directories(self.directory, self.packages)
+
+    async def get_response(self, path, scope):
+        self._refresh_directories()
+        return await super().get_response(path, scope)
 
     def file_response(self, full_path, stat_result, scope, status_code=200):
         from app.utils.media_safety import resolve_media_delivery, safe_media_response_headers
@@ -997,8 +1032,8 @@ class HardenedMediaStaticFiles(StaticFiles):
         return response
 
 
-app.mount("/download_images", HardenedMediaStaticFiles(directory="download_images"), name="download_images")
-logger.info(f"📁 图片下载目录: {download_images_dir.absolute()}")
+app.mount("/download_images", HardenedMediaStaticFiles(directory=str(download_images_dir)), name="download_images")
+logger.info(f"📁 图片下载目录: {download_images_dir}")
 
 
 # ================= 异常处理 =================

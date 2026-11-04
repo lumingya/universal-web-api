@@ -111,3 +111,53 @@ def test_cute_mode_off_returns_original(monkeypatch):
         classmethod(lambda cls, key, *a, **k: False if key in ("LOG_INFO_CUTE_MODE", "LOG_DEBUG_CUTE_MODE") else real_get(key, *a, **k)),
     )
     assert ct.cuteify_display_message("INFO", "REQUEST", "完成 (3.21s)") == "完成 (3.21s)"
+
+
+def test_all_debug_matchers_are_registered_in_order():
+    """守卫：_cuteify_debug_part_* 必须全部登记进 _CUTE_DEBUG_MATCHERS。
+
+    _cuteify_debug_message 原是 619 行 / 圈复杂度 127 的单体函数，已按顺序**逐字**
+    拆成多段（见 docs/plans/REFACTOR_PLAN-2026-10.md 步骤 8）。拆分后本函数只做
+    分发：按顺序尝试 _CUTE_DEBUG_MATCHERS，第一个非 None 即命中。
+
+    因此**漏登记某一段 = 静默丢掉一整批翻译规则**，且不会报错、只会让日志变回原文，
+    极易在后续改动中被忽略。这里锁住两件事：
+    - 每个 _cuteify_debug_part_N 都在表里（不许漏）；
+    - 表里顺序与编号一致（匹配顺序直接影响命中结果）。
+    """
+    parts = {
+        int(name.rsplit("_", 1)[1]): fn
+        for name, fn in vars(ct).items()
+        if name.startswith("_cuteify_debug_part_") and callable(fn)
+    }
+    assert parts, "没有找到任何 _cuteify_debug_part_* 分段函数"
+
+    expected = tuple(parts[i] for i in sorted(parts))
+    assert ct._CUTE_DEBUG_MATCHERS == expected, (
+        "_CUTE_DEBUG_MATCHERS 与 _cuteify_debug_part_* 不一致："
+        "要么有分段漏登记，要么顺序被打乱（匹配顺序会影响命中结果）"
+    )
+
+
+def test_debug_message_still_translates_after_split(monkeypatch):
+    """拆分后行为不变：断言精确译文，而不是"包含某个词"。
+
+    期望值取自拆分前实现的真实输出；拆分时另用 52 条语料做过 before/after 差分
+    （21 条命中翻译，0 处不一致），这里只留下若干代表例做常驻守卫。
+    """
+    monkeypatch.setattr(BrowserConstants, "get", staticmethod(lambda key, default=None: True))
+
+    cases = {
+        "[STEALTH] 发送重试 #3":
+            "小鹿发现消息没动静，又轻轻点了一下发送按钮（第 3 次）喵",
+        "标签页 abc123 分配编号 #7":
+            "小鹿给标签页 abc123 贴上了固定编号 #7 喵",
+        "输入验证通过 (len=12, diff=+3)":
+            "小鹿核对过输入啦，长度 12，和目标差了 +3 个字符喵",
+        "[NetworkMonitor] 检测到结束标志，完成监听":
+            "小鹿看到结束标记啦，这轮监听可以收尾了喵",
+    }
+    for raw, expected in cases.items():
+        assert ct._cuteify_debug_message("TEST", raw) == expected, (
+            f"译文变了，说明某段规则错位或丢失：{raw!r}"
+        )

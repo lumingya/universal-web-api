@@ -7,10 +7,10 @@ from DrissionPage import errors as dp_errors
 
 from app.core.driver import (
     ContextLost,
+    DrissionTabDriver,
     DriverDisconnected,
     DriverError,
     DriverTimeout,
-    DrissionTabDriver,
     FakeElement,
     FakeTabDriver,
     ScriptError,
@@ -21,7 +21,6 @@ from app.core.driver import (
     translated_errors,
 )
 from tests._real_browser import launch_page
-
 
 # --------------------------------------------------------------------------- 统一异常
 

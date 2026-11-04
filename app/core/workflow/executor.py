@@ -10,33 +10,33 @@ app/core/workflow/executor.py - 工作流执行器
 
 import copy
 import json
-import time
 import random
+import time
 import uuid
-from typing import Generator, Dict, Any, Callable, Optional
+from typing import Any, Callable, Dict, Generator, Optional
 
 from app.core.config import (
-    logger,
-    SSEFormatter,
     ElementNotFoundError,
+    SSEFormatter,
     WorkflowError,
+    logger,
 )
+from app.core.driver import driver_for_tab
 from app.core.elements import ElementFinder
+from app.core.network_monitor import (
+    NetworkInterceptionTriggered,
+    NetworkMonitorError,
+    NetworkMonitorTerminalError,
+    NetworkMonitorTimeout,
+    create_network_monitor,
+)
 from app.core.page_capture import create_page_fetch_capture
 from app.core.request_transport import (
     normalize_request_transport_config,
 )
 from app.core.stream_monitor import StreamMonitor
 from app.services.arena_image_generation import ArenaImageGenerationError
-from app.core.network_monitor import (
-    create_network_monitor,
-    NetworkMonitorTimeout,
-    NetworkMonitorError,
-    NetworkMonitorTerminalError,
-    NetworkInterceptionTriggered,
-)
 
-from .attachment_monitor import AttachmentMonitor
 from .arena_send_watchdog import (
     ArenaConfirmedSendNoTarget,
     ArenaPageError,
@@ -44,14 +44,45 @@ from .arena_send_watchdog import (
     ArenaSendWatchdog,
     ArenaSendWatchdogCancelled,
 )
-from .text_input import TextInputHandler
-from .image_input import ImageInputHandler
+from .attachment_monitor import AttachmentMonitor
 from .executor_actions import WorkflowExecutorActionMixin
 from .executor_interaction import WorkflowExecutorInteractionMixin
 from .executor_request_transport import WorkflowExecutorRequestTransportMixin
 from .executor_send import WorkflowExecutorSendMixin
+from .image_input import ImageInputHandler
 from .script_loader import script_loader
-from app.core.driver import driver_for_tab
+from .text_input import TextInputHandler
+
+# ---------------------------------------------------------------------------
+# 步骤动作 -> 处理器方法名
+#
+# execute_step 原为 474 行的函数，主体是一条按 action 分派的 if/elif 链
+# （CC 115），最大的 STREAM_WAIT/STREAM_OUTPUT 分支有 241 行。改为查表后
+# 新增一个步骤动作只需在这里登记一行。
+#
+# 两点与 _execute_action 的注册表不同，改动时需注意：
+#   1. 处理器是**生成器**：调用方必须用 yield from，不能用 return；
+#   2. 未知动作在 execute_step 里只记 debug 日志并正常结束（不是报错），
+#      这是原 else 分支的行为，注册表化时保持不变。
+#
+# 表里的每个方法名必须真实存在，由 tests/test_executor_step_registry.py
+# 断言；不可哈希的 action 也不会抛 TypeError（同处有测试）。
+# ---------------------------------------------------------------------------
+
+_STEP_HANDLERS: Dict[str, str] = {
+    "CLICK": "_step_click",
+    "COORD_CLICK": "_step_coord_click",
+    "COORD_SCROLL": "_step_coord_scroll",
+    "FILL_INPUT": "_step_fill_input",
+    "JS_EXEC": "_step_js_exec",
+    "KEY_PRESS": "_step_key_press",
+    "PAGE_FETCH": "_step_page_fetch",
+    "READONLY_HINT": "_step_readonly_hint",
+    "SELECT_MODEL": "_step_select_model",
+    "STREAM_OUTPUT": "_step_stream",
+    "STREAM_WAIT": "_step_stream",
+    "WAIT": "_step_wait",
+}
 
 
 class WorkflowExecutor(
@@ -862,385 +893,25 @@ class WorkflowExecutor(
             self._last_stream_media_state = {}
 
         try:
-            if action == "WAIT":
-                wait_time = float(value or 0.5)
-                elapsed = 0
-                while elapsed < wait_time:
-                    if self._check_cancelled():
-                        return
-                    time.sleep(min(0.1, wait_time - elapsed))
-                    elapsed += 0.1
-
-            elif action == "KEY_PRESS":
-                key = target_key or value
-                # 包含 Enter 的按键（Enter、Ctrl+Enter 等）可能触发提交
-                if self._combo_contains_submit_key(key):
-                    self._capture_arena_page_error_baseline("keypress")
-                    if self._network_monitor is not None:
-                        self._prepare_page_fetch_capture()
-                        self._network_monitor.pre_start()
-                    if self._attempt_request_transport_send():
-                        return
-                    if self._has_pending_request_transport_prompt():
-                        self._ensure_cached_prompt_filled()
-                    self._wait_for_attachments_ready_before_send(
-                        self._selectors.get("send_btn", "")
-                    )
-                    if self._network_monitor is not None:
-                        self._prepare_page_fetch_capture()
-                        self._network_monitor.pre_start()
-                        self._network_monitor.mark_send_attempt()
-                self._execute_keypress_combo(key)
-
-            elif action == "JS_EXEC":
-                self._execute_javascript(
-                    code=value,
-                    target=target_key,
-                    context=context,
-                    execution=execution,
-                    optional=optional,
-                )
-
-            elif action == "READONLY_HINT":
-                logger.debug(f"[WORKFLOW_HINT] {str(value or '')[:160]}")
-                return
-
-            elif action == "SELECT_MODEL":
-                self._execute_select_model(
-                    selector=selector,
-                    target_key=target_key,
-                    value=value,
-                    context=context,
-                    optional=optional,
-                )
-
-            elif action == "PAGE_FETCH":
-                self._last_request_transport_sent = False
-                if self._network_monitor is not None:
-                    self._prepare_page_fetch_capture()
-                    self._network_monitor.pre_start()
-                if not self._has_pending_request_transport_prompt():
-                    self._stage_request_transport_from_context(
-                        selector=selector,
-                        target_key=target_key,
-                        optional=optional,
-                        context=context,
-                    )
-                if self._attempt_request_transport_send():
-                    return
-                if self._has_pending_request_transport_prompt():
-                    pending = self._pending_request_transport_state or {}
-                    if pending.get("selector") or pending.get("target_key"):
-                        self._ensure_cached_prompt_filled()
-                    else:
-                        self._request_transport_bypass = True
-                        self._clear_request_transport_state()
-                return
-
-            elif action == "CLICK":
-                # ===== 隐身模式：首次交互前执行人类行为预热 =====
-                self._maybe_warmup_page_for_stealth(action, target_key)
-
-                if target_key == "send_btn":
-                    self._capture_arena_page_error_baseline("click")
-                    # 🆕 发送前启动网络监听（如果已配置）
-                    if self._network_monitor is not None:
-                        self._prepare_page_fetch_capture()
-                        self._network_monitor.pre_start()
-                    if self._attempt_request_transport_send():
-                        return
-                    if self._has_pending_request_transport_prompt():
-                        self._ensure_cached_prompt_filled()
-                    self._wait_for_attachments_ready_before_send(selector)
-                    if self._network_monitor is not None:
-                        self._prepare_page_fetch_capture()
-                        self._network_monitor.pre_start()
-
-                    self._execute_click_with_step_policy(
-                        selector,
-                        target_key,
-                        optional,
-                        click_fn=lambda: self._execute_click_send_reliably(
-                            selector=selector,
-                            target_key=target_key,
-                            optional=optional,
-                        ),
-                    )
-                else:
-                    self._execute_click_with_step_policy(selector, target_key, optional)
-
-            elif action == "COORD_CLICK":
-                self._maybe_warmup_page_for_stealth(action, target_key)
-
-                self._execute_coord_click(value, optional)
-
-            elif action == "COORD_SCROLL":
-                self._maybe_warmup_page_for_stealth(action, target_key)
-
-                self._execute_coord_scroll(value, optional)
-
-            elif action == "FILL_INPUT":
-                prompt = context.get("prompt", "") if context else ""
-                if self._stage_request_transport_from_context(
-                    selector=selector,
-                    target_key=target_key,
-                    optional=optional,
-                    context=context,
-                ):
-                    return
-                self._execute_fill(selector, prompt, target_key, optional)
-
-            elif action in ("STREAM_WAIT", "STREAM_OUTPUT"):
-                user_input = context.get("prompt", "") if context else ""
-                self._current_result_prompt = str(user_input or "")
-                self._last_stream_media_state = {}
-                self._last_stream_media_items = []
-                interrupted_image_resume = self._consume_interrupted_image_dom_resume()
-
-                # 网络流式输出与网络异常拦截解耦：
-                # - mode=network: 走网络流式（可回退 DOM）
-                # - mode!=network 且启用拦截: 后台消费网络事件，前台仍走 DOM
-                monitor_used = None
-                use_network_stream = (
-                    self._network_monitor is not None
-                    and not self._intercept_only_mode
-                    and self._stream_mode == "network"
-                )
-
-                if interrupted_image_resume is not None:
-                    logger.info("[Executor] 从插队前原始基线继续 DOM 图片收尾")
-                    yield from self._stream_monitor.monitor(
-                        selector=selector,
-                        user_input=user_input,
-                        completion_id=self._completion_id,
-                        baseline_snapshot=interrupted_image_resume.get("baseline_snapshot"),
-                        sent_content_length=int(
-                            interrupted_image_resume.get("sent_content_length") or 0
-                        ),
-                        fallback_reason="workflow_interrupt_dom_resume",
-                        recovery_mode="workflow_dom_resume",
-                        resume_image_urls=list(
-                            interrupted_image_resume.get("image_urls") or []
-                        ),
-                    )
-                    if self._stream_monitor is not None:
-                        self._stream_monitor.clear_send_baseline()
-                    monitor_used = "dom_interrupt_resume"
-
-                elif use_network_stream:
-                    if ArenaSendWatchdog.applies_to(getattr(self, "tab", None)):
-                        if self.session is not None:
-                            setattr(
-                                self.session,
-                                "_arena_watchdog_input_selector",
-                                str(self._selectors.get("input_box") or ""),
-                            )
-
-                        def _workflow_interrupt_pending() -> bool:
-                            if self.session is None:
-                                return False
-                            try:
-                                from app.services.command_engine import command_engine
-                                return bool(
-                                    command_engine.workflow_interrupt_requested(self.session)
-                                )
-                            except Exception:
-                                return False
-
-                        watchdog = ArenaSendWatchdog(
-                            tab=self.tab,
-                            network_monitor=self._network_monitor,
-                            selectors=self._selectors,
-                            should_stop=self._check_cancelled,
-                            workflow_interrupted=_workflow_interrupt_pending,
-                            page_error_baseline=self._arena_page_error_baseline,
-                        )
-                        try:
-                            watchdog.wait_for_target()
-                        except ArenaSendWatchdogCancelled:
-                            return
-                        except ArenaPageError as exc:
-                            logger.error(
-                                f"[Executor] Arena 页面检测到明确错误拦截，立即终止工作流: {exc}"
-                            )
-                            for monitor in (self._network_monitor, self._stream_monitor):
-                                try:
-                                    if monitor is not None and hasattr(monitor, "cleanup"):
-                                        monitor.cleanup()
-                                except Exception as cleanup_exc:
-                                    logger.debug(
-                                        "[Executor] Arena watchdog error cleanup failed: "
-                                        f"{cleanup_exc}"
-                                    )
-                            raise WorkflowError(f"stream_terminal_error:{exc}")
-                        except ArenaSendUnconfirmed:
-                            raise WorkflowError("send_unconfirmed")
-                        except ArenaConfirmedSendNoTarget as exc:
-                            logger.warning(
-                                "[Executor] Arena confirmed the send but no matching "
-                                f"target stream arrived: {exc}"
-                            )
-                            for monitor in (self._network_monitor, self._stream_monitor):
-                                try:
-                                    if monitor is not None and hasattr(monitor, "cleanup"):
-                                        monitor.cleanup()
-                                except Exception as cleanup_exc:
-                                    logger.debug(
-                                        "[Executor] Arena watchdog cleanup failed: "
-                                        f"{cleanup_exc}"
-                                    )
-                            raise WorkflowError("arena_send_no_target")
-                    try:
-                        if self._page_fetch_capture is not None:
-                            logger.debug(
-                                f"[Executor] 尝试{self._page_fetch_capture.get_mode_name()}模式"
-                            )
-                            yield from self._page_fetch_capture.monitor(
-                                completion_id=self._completion_id
-                            )
-                            if self._stream_monitor is not None:
-                                self._stream_monitor.clear_send_baseline()
-                            monitor_used = self._page_fetch_capture.get_monitor_id()
-                        else:
-                            logger.debug("[Executor] 尝试网络监听模式")
-                            yield from self._network_monitor.monitor(
-                                selector=selector,
-                                user_input=user_input,
-                                completion_id=self._completion_id
-                            )
-                            self._last_stream_media_state = (
-                                self._network_monitor.get_media_generation_state()
-                                if self._network_monitor is not None
-                                else {}
-                            )
-                            self._last_stream_media_items = (
-                                self._network_monitor.get_stream_media_items()
-                                if self._network_monitor is not None
-                                else []
-                            )
-                            if self._stream_monitor is not None:
-                                self._stream_monitor.clear_send_baseline()
-                            monitor_used = "network"
-
-                    except NetworkInterceptionTriggered as e:
-                        logger.warning(f"[Executor] 网络拦截已触发: {e}")
-                        try:
-                            from app.services.command_engine import command_engine
-                            if self.session is not None and command_engine.workflow_interrupt_requested(self.session):
-                                setattr(self.session, "_workflow_stop_reason", "command_interrupt")
-                                return
-                        except Exception:
-                            pass
-                        raise WorkflowError("network_intercepted")
-
-                    except NetworkMonitorTerminalError as e:
-                        if self._wait_for_verification_interrupt_after_rate_limit(e):
-                            return
-                        clean_err = str(e)
-                        try:
-                            from app.services.error_metadata import resolve_error_metadata
-                            meta = resolve_error_metadata(clean_err)
-                            if meta and meta.message:
-                                clean_err = f"[{meta.code}] {meta.message}" if (meta.code and meta.code not in {"error", "workflow_failed", "upstream_error"}) else meta.message
-                        except Exception:
-                            pass
-                        logger.error(f"[Executor] 目标流已确认失败，终止工作流: {clean_err}")
-                        raise WorkflowError(f"stream_terminal_error:{e}")
-
-                    except NetworkMonitorTimeout as e:
-                        fallback_reason = str(e)
-                        logger.warning(
-                            f"[Executor] 网络监听超时，回退到 DOM 模式: {e}"
-                        )
-                        # 回退到 DOM 监听
-                        dom_fallback_kwargs = self._build_dom_fallback_kwargs()
-                        yield from self._stream_monitor.monitor(
-                            selector=selector,
-                            user_input=user_input,
-                            completion_id=self._completion_id,
-                            fallback_reason=fallback_reason,
-                            **dom_fallback_kwargs,
-                        )
-                        if self._stream_monitor.stream_recovery_exhausted():
-                            logger.error(
-                                "[Executor] 断流恢复未确认最终结果，终止本轮而不释放为成功"
-                            )
-                            raise WorkflowError("stream_recovery_exhausted")
-                        if self._stream_monitor.image_recovery_exhausted():
-                            retry_baseline = self._stream_monitor.capture_send_baseline(
-                                selector,
-                                user_input=user_input,
-                            )
-                            self._stream_monitor.consume_send_baseline()
-                            if self._restart_stalled_image_generation():
-                                yield from self._stream_monitor.monitor(
-                                    selector=selector,
-                                    user_input=user_input,
-                                    completion_id=self._completion_id,
-                                    baseline_snapshot=retry_baseline,
-                                    sent_content_length=0,
-                                    fallback_reason="image_generation_retry",
-                                )
-                                if self._stream_monitor.image_recovery_exhausted():
-                                    logger.error(
-                                        "[Image Recovery] 自动重试后仍未产出图片，停止本轮生成"
-                                    )
-                                    self._stop_stalled_image_generation()
-                        if self._stream_monitor is not None:
-                            self._stream_monitor.clear_send_baseline()
-                        self._last_stream_media_state = {}
-                        self._last_stream_media_items = []
-                        monitor_used = "dom_fallback"
-
-                    except NetworkMonitorError as e:
-                        fallback_reason = str(e)
-                        logger.error(
-                            f"[Executor] 网络监听错误，回退到 DOM 模式: {e}"
-                        )
-                        # 回退到 DOM 监听
-                        dom_fallback_kwargs = self._build_dom_fallback_kwargs()
-                        yield from self._stream_monitor.monitor(
-                            selector=selector,
-                            user_input=user_input,
-                            completion_id=self._completion_id,
-                            fallback_reason=fallback_reason,
-                            **dom_fallback_kwargs,
-                        )
-                        if self._stream_monitor.stream_recovery_exhausted():
-                            logger.error(
-                                "[Executor] 断流恢复未确认最终结果，终止本轮而不释放为成功"
-                            )
-                            raise WorkflowError("stream_recovery_exhausted")
-                        if self._stream_monitor is not None:
-                            self._stream_monitor.clear_send_baseline()
-                        self._last_stream_media_state = {}
-                        self._last_stream_media_items = []
-                        monitor_used = "dom_fallback"
-
-                else:
-                    yield from self._stream_monitor.monitor(
-                        selector=selector,
-                        user_input=user_input,
-                        completion_id=self._completion_id
-                    )
-                    if self._stream_monitor is not None:
-                        self._stream_monitor.clear_send_baseline()
-                    self._last_stream_media_state = {}
-                    self._last_stream_media_items = []
-                    monitor_used = "dom"
-
-                if monitor_used:
-                    logger.debug(f"[Executor] 监听完成 (mode={monitor_used})")
-
-            else:
+            handler_name = _STEP_HANDLERS.get(action) if isinstance(action, str) else None
+            if handler_name is None:
                 logger.debug(f"未知动作: {action}")
+            else:
+                # 只有流式步骤（STREAM_WAIT / STREAM_OUTPUT）会产出事件块，
+                # 其余步骤只是执行副作用后返回 None，因此不能直接 yield from
+                # ——对 None 做 yield from 会抛 TypeError。
+                step_events = getattr(self, handler_name)(
+                    action, selector, target_key, value, optional, context, execution
+                )
+                if step_events is not None:
+                    yield from step_events
 
         except ElementNotFoundError as e:
             if self._check_cancelled():
                 logger.info(f"[Executor] step cancelled after element lookup failure [{action}]: {e}")
                 return
             if not optional:
-                yield self.formatter.pack_error(f"元素未找到: {str(e)}")
+                yield self.formatter.pack_error(f"元素未找到: {e!s}")
                 raise
 
         except ArenaImageGenerationError:
@@ -1314,10 +985,534 @@ class WorkflowExecutor(
                 return
             logger.error(f"步骤执行失败 [{action}]: {e}")
             if not optional:
-                yield self.formatter.pack_error(f"执行失败: {str(e)}")
+                yield self.formatter.pack_error(f"执行失败: {e!s}")
                 raise
         finally:
             self._current_step_execution = previous_step_execution
+
+    def _step_wait(
+        self,
+        action: str,
+        selector: str,
+        target_key: str,
+        value: Any = None,
+        optional: bool = False,
+        context: Dict = None,
+        execution: Dict = None,
+    ) -> Generator[str, None, None]:
+        """执行 action == 'WAIT' 步骤。
+
+        从 execute_step 的 if/elif 派发链中原样提出，方法体与提取前
+        逐字节相同（仅缩进变化）。形参名沿用 execute_step 的同名参数。
+        """
+        wait_time = float(value or 0.5)
+        elapsed = 0
+        while elapsed < wait_time:
+            if self._check_cancelled():
+                return
+            time.sleep(min(0.1, wait_time - elapsed))
+            elapsed += 0.1
+
+    def _step_key_press(
+        self,
+        action: str,
+        selector: str,
+        target_key: str,
+        value: Any = None,
+        optional: bool = False,
+        context: Dict = None,
+        execution: Dict = None,
+    ) -> Generator[str, None, None]:
+        """执行 action == 'KEY_PRESS' 步骤。
+
+        从 execute_step 的 if/elif 派发链中原样提出，方法体与提取前
+        逐字节相同（仅缩进变化）。形参名沿用 execute_step 的同名参数。
+        """
+        key = target_key or value
+        # 包含 Enter 的按键（Enter、Ctrl+Enter 等）可能触发提交
+        if self._combo_contains_submit_key(key):
+            self._capture_arena_page_error_baseline("keypress")
+            if self._network_monitor is not None:
+                self._prepare_page_fetch_capture()
+                self._network_monitor.pre_start()
+            if self._attempt_request_transport_send():
+                return
+            if self._has_pending_request_transport_prompt():
+                self._ensure_cached_prompt_filled()
+            self._wait_for_attachments_ready_before_send(
+                self._selectors.get("send_btn", "")
+            )
+            if self._network_monitor is not None:
+                self._prepare_page_fetch_capture()
+                self._network_monitor.pre_start()
+                self._network_monitor.mark_send_attempt()
+        self._execute_keypress_combo(key)
+
+    def _step_js_exec(
+        self,
+        action: str,
+        selector: str,
+        target_key: str,
+        value: Any = None,
+        optional: bool = False,
+        context: Dict = None,
+        execution: Dict = None,
+    ) -> Generator[str, None, None]:
+        """执行 action == 'JS_EXEC' 步骤。
+
+        从 execute_step 的 if/elif 派发链中原样提出，方法体与提取前
+        逐字节相同（仅缩进变化）。形参名沿用 execute_step 的同名参数。
+        """
+        self._execute_javascript(
+            code=value,
+            target=target_key,
+            context=context,
+            execution=execution,
+            optional=optional,
+        )
+
+    def _step_readonly_hint(
+        self,
+        action: str,
+        selector: str,
+        target_key: str,
+        value: Any = None,
+        optional: bool = False,
+        context: Dict = None,
+        execution: Dict = None,
+    ) -> Generator[str, None, None]:
+        """执行 action == 'READONLY_HINT' 步骤。
+
+        从 execute_step 的 if/elif 派发链中原样提出，方法体与提取前
+        逐字节相同（仅缩进变化）。形参名沿用 execute_step 的同名参数。
+        """
+        logger.debug(f"[WORKFLOW_HINT] {str(value or '')[:160]}")
+        return
+
+    def _step_select_model(
+        self,
+        action: str,
+        selector: str,
+        target_key: str,
+        value: Any = None,
+        optional: bool = False,
+        context: Dict = None,
+        execution: Dict = None,
+    ) -> Generator[str, None, None]:
+        """执行 action == 'SELECT_MODEL' 步骤。
+
+        从 execute_step 的 if/elif 派发链中原样提出，方法体与提取前
+        逐字节相同（仅缩进变化）。形参名沿用 execute_step 的同名参数。
+        """
+        self._execute_select_model(
+            selector=selector,
+            target_key=target_key,
+            value=value,
+            context=context,
+            optional=optional,
+        )
+
+    def _step_page_fetch(
+        self,
+        action: str,
+        selector: str,
+        target_key: str,
+        value: Any = None,
+        optional: bool = False,
+        context: Dict = None,
+        execution: Dict = None,
+    ) -> Generator[str, None, None]:
+        """执行 action == 'PAGE_FETCH' 步骤。
+
+        从 execute_step 的 if/elif 派发链中原样提出，方法体与提取前
+        逐字节相同（仅缩进变化）。形参名沿用 execute_step 的同名参数。
+        """
+        self._last_request_transport_sent = False
+        if self._network_monitor is not None:
+            self._prepare_page_fetch_capture()
+            self._network_monitor.pre_start()
+        if not self._has_pending_request_transport_prompt():
+            self._stage_request_transport_from_context(
+                selector=selector,
+                target_key=target_key,
+                optional=optional,
+                context=context,
+            )
+        if self._attempt_request_transport_send():
+            return
+        if self._has_pending_request_transport_prompt():
+            pending = self._pending_request_transport_state or {}
+            if pending.get("selector") or pending.get("target_key"):
+                self._ensure_cached_prompt_filled()
+            else:
+                self._request_transport_bypass = True
+                self._clear_request_transport_state()
+        return
+
+    def _step_click(
+        self,
+        action: str,
+        selector: str,
+        target_key: str,
+        value: Any = None,
+        optional: bool = False,
+        context: Dict = None,
+        execution: Dict = None,
+    ) -> Generator[str, None, None]:
+        """执行 action == 'CLICK' 步骤。
+
+        从 execute_step 的 if/elif 派发链中原样提出，方法体与提取前
+        逐字节相同（仅缩进变化）。形参名沿用 execute_step 的同名参数。
+        """
+        # ===== 隐身模式：首次交互前执行人类行为预热 =====
+        self._maybe_warmup_page_for_stealth(action, target_key)
+
+        if target_key == "send_btn":
+            self._capture_arena_page_error_baseline("click")
+            # 🆕 发送前启动网络监听（如果已配置）
+            if self._network_monitor is not None:
+                self._prepare_page_fetch_capture()
+                self._network_monitor.pre_start()
+            if self._attempt_request_transport_send():
+                return
+            if self._has_pending_request_transport_prompt():
+                self._ensure_cached_prompt_filled()
+            self._wait_for_attachments_ready_before_send(selector)
+            if self._network_monitor is not None:
+                self._prepare_page_fetch_capture()
+                self._network_monitor.pre_start()
+
+            self._execute_click_with_step_policy(
+                selector,
+                target_key,
+                optional,
+                click_fn=lambda: self._execute_click_send_reliably(
+                    selector=selector,
+                    target_key=target_key,
+                    optional=optional,
+                ),
+            )
+        else:
+            self._execute_click_with_step_policy(selector, target_key, optional)
+
+    def _step_coord_click(
+        self,
+        action: str,
+        selector: str,
+        target_key: str,
+        value: Any = None,
+        optional: bool = False,
+        context: Dict = None,
+        execution: Dict = None,
+    ) -> Generator[str, None, None]:
+        """执行 action == 'COORD_CLICK' 步骤。
+
+        从 execute_step 的 if/elif 派发链中原样提出，方法体与提取前
+        逐字节相同（仅缩进变化）。形参名沿用 execute_step 的同名参数。
+        """
+        self._maybe_warmup_page_for_stealth(action, target_key)
+
+        self._execute_coord_click(value, optional)
+
+    def _step_coord_scroll(
+        self,
+        action: str,
+        selector: str,
+        target_key: str,
+        value: Any = None,
+        optional: bool = False,
+        context: Dict = None,
+        execution: Dict = None,
+    ) -> Generator[str, None, None]:
+        """执行 action == 'COORD_SCROLL' 步骤。
+
+        从 execute_step 的 if/elif 派发链中原样提出，方法体与提取前
+        逐字节相同（仅缩进变化）。形参名沿用 execute_step 的同名参数。
+        """
+        self._maybe_warmup_page_for_stealth(action, target_key)
+
+        self._execute_coord_scroll(value, optional)
+
+    def _step_fill_input(
+        self,
+        action: str,
+        selector: str,
+        target_key: str,
+        value: Any = None,
+        optional: bool = False,
+        context: Dict = None,
+        execution: Dict = None,
+    ) -> Generator[str, None, None]:
+        """执行 action == 'FILL_INPUT' 步骤。
+
+        从 execute_step 的 if/elif 派发链中原样提出，方法体与提取前
+        逐字节相同（仅缩进变化）。形参名沿用 execute_step 的同名参数。
+        """
+        prompt = context.get("prompt", "") if context else ""
+        if self._stage_request_transport_from_context(
+            selector=selector,
+            target_key=target_key,
+            optional=optional,
+            context=context,
+        ):
+            return
+        self._execute_fill(selector, prompt, target_key, optional)
+
+    def _step_stream(
+        self,
+        action: str,
+        selector: str,
+        target_key: str,
+        value: Any = None,
+        optional: bool = False,
+        context: Dict = None,
+        execution: Dict = None,
+    ) -> Generator[str, None, None]:
+        """执行 action in ('STREAM_WAIT', 'STREAM_OUTPUT') 步骤。
+
+        从 execute_step 的 if/elif 派发链中原样提出，方法体与提取前
+        逐字节相同（仅缩进变化）。形参名沿用 execute_step 的同名参数。
+        """
+        user_input = context.get("prompt", "") if context else ""
+        self._current_result_prompt = str(user_input or "")
+        self._last_stream_media_state = {}
+        self._last_stream_media_items = []
+        interrupted_image_resume = self._consume_interrupted_image_dom_resume()
+
+        # 网络流式输出与网络异常拦截解耦：
+        # - mode=network: 走网络流式（可回退 DOM）
+        # - mode!=network 且启用拦截: 后台消费网络事件，前台仍走 DOM
+        monitor_used = None
+        use_network_stream = (
+            self._network_monitor is not None
+            and not self._intercept_only_mode
+            and self._stream_mode == "network"
+        )
+
+        if interrupted_image_resume is not None:
+            logger.info("[Executor] 从插队前原始基线继续 DOM 图片收尾")
+            yield from self._stream_monitor.monitor(
+                selector=selector,
+                user_input=user_input,
+                completion_id=self._completion_id,
+                baseline_snapshot=interrupted_image_resume.get("baseline_snapshot"),
+                sent_content_length=int(
+                    interrupted_image_resume.get("sent_content_length") or 0
+                ),
+                fallback_reason="workflow_interrupt_dom_resume",
+                recovery_mode="workflow_dom_resume",
+                resume_image_urls=list(
+                    interrupted_image_resume.get("image_urls") or []
+                ),
+            )
+            if self._stream_monitor is not None:
+                self._stream_monitor.clear_send_baseline()
+            monitor_used = "dom_interrupt_resume"
+
+        elif use_network_stream:
+            if ArenaSendWatchdog.applies_to(getattr(self, "tab", None)):
+                if self.session is not None:
+                    setattr(
+                        self.session,
+                        "_arena_watchdog_input_selector",
+                        str(self._selectors.get("input_box") or ""),
+                    )
+
+                def _workflow_interrupt_pending() -> bool:
+                    if self.session is None:
+                        return False
+                    try:
+                        from app.services.command_engine import command_engine
+                        return bool(
+                            command_engine.workflow_interrupt_requested(self.session)
+                        )
+                    except Exception:
+                        return False
+
+                watchdog = ArenaSendWatchdog(
+                    tab=self.tab,
+                    network_monitor=self._network_monitor,
+                    selectors=self._selectors,
+                    should_stop=self._check_cancelled,
+                    workflow_interrupted=_workflow_interrupt_pending,
+                    page_error_baseline=self._arena_page_error_baseline,
+                )
+                try:
+                    watchdog.wait_for_target()
+                except ArenaSendWatchdogCancelled:
+                    return
+                except ArenaPageError as exc:
+                    logger.error(
+                        f"[Executor] Arena 页面检测到明确错误拦截，立即终止工作流: {exc}"
+                    )
+                    for monitor in (self._network_monitor, self._stream_monitor):
+                        try:
+                            if monitor is not None and hasattr(monitor, "cleanup"):
+                                monitor.cleanup()
+                        except Exception as cleanup_exc:
+                            logger.debug(
+                                "[Executor] Arena watchdog error cleanup failed: "
+                                f"{cleanup_exc}"
+                            )
+                    raise WorkflowError(f"stream_terminal_error:{exc}")
+                except ArenaSendUnconfirmed:
+                    raise WorkflowError("send_unconfirmed")
+                except ArenaConfirmedSendNoTarget as exc:
+                    logger.warning(
+                        "[Executor] Arena confirmed the send but no matching "
+                        f"target stream arrived: {exc}"
+                    )
+                    for monitor in (self._network_monitor, self._stream_monitor):
+                        try:
+                            if monitor is not None and hasattr(monitor, "cleanup"):
+                                monitor.cleanup()
+                        except Exception as cleanup_exc:
+                            logger.debug(
+                                "[Executor] Arena watchdog cleanup failed: "
+                                f"{cleanup_exc}"
+                            )
+                    raise WorkflowError("arena_send_no_target")
+            try:
+                if self._page_fetch_capture is not None:
+                    logger.debug(
+                        f"[Executor] 尝试{self._page_fetch_capture.get_mode_name()}模式"
+                    )
+                    yield from self._page_fetch_capture.monitor(
+                        completion_id=self._completion_id
+                    )
+                    if self._stream_monitor is not None:
+                        self._stream_monitor.clear_send_baseline()
+                    monitor_used = self._page_fetch_capture.get_monitor_id()
+                else:
+                    logger.debug("[Executor] 尝试网络监听模式")
+                    yield from self._network_monitor.monitor(
+                        selector=selector,
+                        user_input=user_input,
+                        completion_id=self._completion_id
+                    )
+                    self._last_stream_media_state = (
+                        self._network_monitor.get_media_generation_state()
+                        if self._network_monitor is not None
+                        else {}
+                    )
+                    self._last_stream_media_items = (
+                        self._network_monitor.get_stream_media_items()
+                        if self._network_monitor is not None
+                        else []
+                    )
+                    if self._stream_monitor is not None:
+                        self._stream_monitor.clear_send_baseline()
+                    monitor_used = "network"
+
+            except NetworkInterceptionTriggered as e:
+                logger.warning(f"[Executor] 网络拦截已触发: {e}")
+                try:
+                    from app.services.command_engine import command_engine
+                    if self.session is not None and command_engine.workflow_interrupt_requested(self.session):
+                        setattr(self.session, "_workflow_stop_reason", "command_interrupt")
+                        return
+                except Exception:
+                    pass
+                raise WorkflowError("network_intercepted")
+
+            except NetworkMonitorTerminalError as e:
+                if self._wait_for_verification_interrupt_after_rate_limit(e):
+                    return
+                clean_err = str(e)
+                try:
+                    from app.services.error_metadata import resolve_error_metadata
+                    meta = resolve_error_metadata(clean_err)
+                    if meta and meta.message:
+                        clean_err = f"[{meta.code}] {meta.message}" if (meta.code and meta.code not in {"error", "workflow_failed", "upstream_error"}) else meta.message
+                except Exception:
+                    pass
+                logger.error(f"[Executor] 目标流已确认失败，终止工作流: {clean_err}")
+                raise WorkflowError(f"stream_terminal_error:{e}")
+
+            except NetworkMonitorTimeout as e:
+                fallback_reason = str(e)
+                logger.warning(
+                    f"[Executor] 网络监听超时，回退到 DOM 模式: {e}"
+                )
+                # 回退到 DOM 监听
+                dom_fallback_kwargs = self._build_dom_fallback_kwargs()
+                yield from self._stream_monitor.monitor(
+                    selector=selector,
+                    user_input=user_input,
+                    completion_id=self._completion_id,
+                    fallback_reason=fallback_reason,
+                    **dom_fallback_kwargs,
+                )
+                if self._stream_monitor.stream_recovery_exhausted():
+                    logger.error(
+                        "[Executor] 断流恢复未确认最终结果，终止本轮而不释放为成功"
+                    )
+                    raise WorkflowError("stream_recovery_exhausted")
+                if self._stream_monitor.image_recovery_exhausted():
+                    retry_baseline = self._stream_monitor.capture_send_baseline(
+                        selector,
+                        user_input=user_input,
+                    )
+                    self._stream_monitor.consume_send_baseline()
+                    if self._restart_stalled_image_generation():
+                        yield from self._stream_monitor.monitor(
+                            selector=selector,
+                            user_input=user_input,
+                            completion_id=self._completion_id,
+                            baseline_snapshot=retry_baseline,
+                            sent_content_length=0,
+                            fallback_reason="image_generation_retry",
+                        )
+                        if self._stream_monitor.image_recovery_exhausted():
+                            logger.error(
+                                "[Image Recovery] 自动重试后仍未产出图片，停止本轮生成"
+                            )
+                            self._stop_stalled_image_generation()
+                if self._stream_monitor is not None:
+                    self._stream_monitor.clear_send_baseline()
+                self._last_stream_media_state = {}
+                self._last_stream_media_items = []
+                monitor_used = "dom_fallback"
+
+            except NetworkMonitorError as e:
+                fallback_reason = str(e)
+                logger.error(
+                    f"[Executor] 网络监听错误，回退到 DOM 模式: {e}"
+                )
+                # 回退到 DOM 监听
+                dom_fallback_kwargs = self._build_dom_fallback_kwargs()
+                yield from self._stream_monitor.monitor(
+                    selector=selector,
+                    user_input=user_input,
+                    completion_id=self._completion_id,
+                    fallback_reason=fallback_reason,
+                    **dom_fallback_kwargs,
+                )
+                if self._stream_monitor.stream_recovery_exhausted():
+                    logger.error(
+                        "[Executor] 断流恢复未确认最终结果，终止本轮而不释放为成功"
+                    )
+                    raise WorkflowError("stream_recovery_exhausted")
+                if self._stream_monitor is not None:
+                    self._stream_monitor.clear_send_baseline()
+                self._last_stream_media_state = {}
+                self._last_stream_media_items = []
+                monitor_used = "dom_fallback"
+
+        else:
+            yield from self._stream_monitor.monitor(
+                selector=selector,
+                user_input=user_input,
+                completion_id=self._completion_id
+            )
+            if self._stream_monitor is not None:
+                self._stream_monitor.clear_send_baseline()
+            self._last_stream_media_state = {}
+            self._last_stream_media_items = []
+            monitor_used = "dom"
+
+        if monitor_used:
+            logger.debug(f"[Executor] 监听完成 (mode={monitor_used})")
 
     def _execute_keypress(self, key: str):
         """执行按键操作（隐身模式人类化时序）"""
