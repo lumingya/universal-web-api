@@ -1,0 +1,12 @@
+{
+  "parser": "mimo",
+  "synthetic": true,
+  "source": "按 aistudio.xiaomimimo.com 的 open-apis/react/chat 端点实测报文（2026-11）合成",
+  "description": "reasoningContent 思考块 + content 正文 + finish；思考不得混入正文",
+  "raw": "event: dialogId\ndata: {\"content\": \"32958286\"}\n\nevent: message\ndata: {\"messageType\": \"assistant\", \"reasoningContent\": \"先判断问题，\"}\n\nevent: message\ndata: {\"messageType\": \"assistant\", \"reasoningContent\": \"再回答。\"}\n\nevent: message\ndata: {\"messageType\": \"assistant\", \"content\": \"你好\"}\n\nevent: message\ndata: {\"messageType\": \"assistant\", \"content\": \"，世界！\"}\n\nevent: usage\ndata: {\"promptTokens\": 100, \"completionTokens\": 5, \"totalTokens\": 105}\n\nevent: finish\ndata: {\"content\": \"[DONE]\"}\n\n",
+  "expected": {
+    "content": "你好，世界！",
+    "reasoning_content": "先判断问题，再回答。",
+    "done": true
+  }
+}

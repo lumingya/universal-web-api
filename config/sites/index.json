@@ -17,10 +17,10 @@
     },
     "aistudio.xiaomimimo.com": {
       "file": "aistudio.xiaomimimo.com.json",
-      "adapter_version": "2026.09.26",
+      "adapter_version": "2026.11.04",
       "min_app_version": "3.0.0",
-      "config_sha256": "597bcc9691ccd2bc8ca3338e93a7e9df23262b15e3a731ec2701fa0adab9e6ac",
-      "file_sha256": "7ad802aa7b6d101e7f8defef797ff77e0be4ccab15e22c18ae776a1b19dd9d79"
+      "config_sha256": "e6bb543415616bf6d7ebe7221fb0c818b856828385f4720cbda6e1938051bcf2",
+      "file_sha256": "9914c66818099141d7e007a053f8a2041f583bdb5e7126f075b1714b2c04a2bb"
     },
     "arena.ai": {
       "file": "arena.ai.json",

@@ -70,6 +70,7 @@ class MimoParser(ResponseParser):
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "content": "",
+            "reasoning_content": "",
             "images": [],
             "done": False,
             "error": None,
@@ -85,9 +86,11 @@ class MimoParser(ResponseParser):
             if not new_data:
                 return result
 
-            delta_content, done = self._consume_new_data(new_data)
+            delta_content, delta_reasoning, done = self._consume_new_data(new_data)
             if delta_content:
                 result["content"] = delta_content
+            if delta_reasoning:
+                result["reasoning_content"] = delta_reasoning
             result["done"] = done
 
         except Exception as e:
@@ -96,10 +99,10 @@ class MimoParser(ResponseParser):
 
         return result
 
-    def _consume_new_data(self, new_data: str) -> Tuple[str, bool]:
+    def _consume_new_data(self, new_data: str) -> Tuple[str, str, bool]:
         normalized = (self._pending + new_data).replace("\r\n", "\n")
         if not normalized:
-            return "", False
+            return "", "", False
 
         blocks = normalized.split("\n\n")
         if normalized.endswith("\n\n"):
@@ -110,18 +113,21 @@ class MimoParser(ResponseParser):
             complete_blocks = [block for block in blocks if block.strip()]
 
         content_parts: List[str] = []
+        reasoning_parts: List[str] = []
         done = False
 
         for block in complete_blocks:
-            block_content, block_done = self._parse_event_block(block)
+            block_content, block_reasoning, block_done = self._parse_event_block(block)
             if block_content:
                 content_parts.append(block_content)
+            if block_reasoning:
+                reasoning_parts.append(block_reasoning)
             if block_done:
                 done = True
 
-        return "".join(content_parts), done
+        return "".join(content_parts), "".join(reasoning_parts), done
 
-    def _parse_event_block(self, block: str) -> Tuple[str, bool]:
+    def _parse_event_block(self, block: str) -> Tuple[str, str, bool]:
         event_name = ""
         data_lines: List[str] = []
 
@@ -135,33 +141,51 @@ class MimoParser(ResponseParser):
                 data_lines.append(line[5:].strip())
 
         if event_name == "finish":
-            return "", self._has_seen_visible_text
+            return "", "", self._has_seen_visible_text
         if event_name != "message":
-            return "", False
+            return "", "", False
 
         payload = "\n".join(data_lines).strip()
         if not payload:
-            return "", False
+            return "", "", False
 
         try:
             data = json.loads(payload)
         except json.JSONDecodeError:
-            return "", False
+            return "", "", False
 
         if not isinstance(data, dict):
-            return "", False
-        if str(data.get("type") or "").strip().lower() != "text":
-            return "", False
+            return "", "", False
+
+        # 新版端点 open-apis/react/chat 的 message 事件形如
+        #   {"messageType": "assistant", "content": "..."}
+        #   {"messageType": "assistant", "reasoningContent": "..."}
+        # 旧版 bot/chat 端点形如 {"type": "text", "content": "..."}。
+        # 旧实现在此硬判 type=="text"，导致新版完全解析不出内容（字段不存在）。
+        message_type = str(data.get("messageType") or "").strip().lower()
+        legacy_type = str(data.get("type") or "").strip().lower()
+        is_message_event = message_type == "assistant" or legacy_type == "text"
+        if not is_message_event:
+            return "", "", False
+
+        # 思考阶段必须原样上交 reasoning_content：NetworkMonitor 靠它刷新静默
+        # 计时并累加 _total_chunks。若在此丢弃，思考期（可达数十秒）内
+        # _has_stream_output() 恒为 False，会被 first_content_timeout 提前判死。
+        reasoning_text = data.get("reasoningContent", "")
+        if isinstance(reasoning_text, str) and reasoning_text:
+            reasoning_text = self._repair_mojibake_text(reasoning_text)
+        else:
+            reasoning_text = ""
 
         text = data.get("content", "")
         if not isinstance(text, str) or not text:
-            return "", False
+            return "", reasoning_text, False
 
         visible_text = self._strip_think_content(text)
         visible_text = self._repair_mojibake_text(visible_text)
         if visible_text:
             self._has_seen_visible_text = True
-        return visible_text, False
+        return visible_text, reasoning_text, False
 
     def _strip_think_content(self, text: str) -> str:
         if not text:

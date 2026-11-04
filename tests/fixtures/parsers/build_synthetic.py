@@ -144,6 +144,19 @@ def _aistudio_body():
                       ensure_ascii=False)
 
 
+# --------------------------------------------------------------------------- MiMo（react/chat：reasoningContent + content）
+def _mimo_body():
+    return sse([
+        ("dialogId", {"content": "32958286"}),
+        ("message", {"messageType": "assistant", "reasoningContent": "先判断问题，" }),
+        ("message", {"messageType": "assistant", "reasoningContent": "再回答。" }),
+        ("message", {"messageType": "assistant", "content": "你好" }),
+        ("message", {"messageType": "assistant", "content": "，世界！" }),
+        ("usage", {"promptTokens": 100, "completionTokens": 5, "totalTokens": 105}),
+        ("finish", {"content": "[DONE]"}),
+    ])
+
+
 def main():
     save("claude", "thinking_then_text", "Extended Thinking + 正文 + message_stop", sse(CLAUDE_EVENTS), CLAUDE_EXPECTED,
          "按 Anthropic Messages 流式协议（claude.ai 网页端同构）合成")
@@ -165,6 +178,10 @@ def main():
     save("aistudio", "thinking_then_text", "思考块 + 两个正文块（第二块 level2[1]=1）+ 统计块", _aistudio_body(),
          {"content": "你好，世界！", "reasoning_content": "**Thinking about units**", "done": True},
          "按 aistudio_parser.py 注释记录的 GenerateContent 嵌套数组格式合成")
+    save("mimo", "react_chat_thinking_then_text",
+         "reasoningContent 思考块 + content 正文 + finish；思考不得混入正文", _mimo_body(),
+         {"content": "你好，世界！", "reasoning_content": "先判断问题，再回答。", "done": True},
+         "按 aistudio.xiaomimimo.com 的 open-apis/react/chat 端点实测报文（2026-11）合成")
 
 
 if __name__ == "__main__":

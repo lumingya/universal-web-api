@@ -1,31 +1,20 @@
 {
   "schema_version": 1,
   "site": "aistudio.xiaomimimo.com",
-  "adapter_version": "2026.09.26",
+  "adapter_version": "2026.11.04",
   "min_app_version": "3.0.0",
+  "last_verified": "2026-11-04",
   "config": {
     "presets": {
       "主预设": {
         "selectors": {
-          "input_box": "textarea[rows=\"1\"], textarea",
-          "send_btn": "button[data-track-id=\"home_send_btn\"]",
+          "input_box": "textarea[placeholder*=\"有问题\"], textarea[rows=\"1\"], textarea",
+          "send_btn": "button[data-track-id=\"home_send_btn\"], button[data-pa-id=\"home_send_btn\"], button[aria-label=\"发送消息\"]",
           "result_container": ".markdown-prose.select-text, [class*=\"Markdown_markdown__\"]",
-          "new_chat_btn": "button[data-track-id$=\"new_chat_btn\"]",
           "message_wrapper": ".markdown-prose.select-text, [class*=\"Markdown_markdown__\"]",
-          "generating_indicator": "button[data-track-id=\"home_send_btn\"][disabled]",
+          "new_chat_btn": "button[data-track-id=\"navbar_new_chat_btn\"]",
+          "generating_indicator": "button[data-track-id=\"home_send_btn\"][disabled], button[aria-label=\"发送消息\"][disabled]",
           "file_input": "input[type=\"file\"]"
-        },
-        "stream_config": {
-          "mode": "network",
-          "hard_timeout": 300,
-          "network": {
-            "listen_pattern": "open-apis/bot/chat",
-            "stream_match_mode": "keyword",
-            "stream_match_pattern": "open-apis/bot/chat",
-            "parser": "mimo",
-            "silence_threshold": 3,
-            "response_interval": 0.5
-          }
         },
         "workflow": [
           {
@@ -47,6 +36,12 @@
             "value": null
           },
           {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": 0.4
+          },
+          {
             "action": "CLICK",
             "target": "send_btn",
             "optional": false,
@@ -60,6 +55,18 @@
           }
         ],
         "stealth": false,
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
+          "network": {
+            "listen_pattern": "open-apis/react/chat",
+            "stream_match_mode": "keyword",
+            "stream_match_pattern": "open-apis/react/chat",
+            "parser": "mimo",
+            "silence_threshold": 3,
+            "response_interval": 0.5
+          }
+        },
         "image_extraction": {
           "enabled": false,
           "modalities": {
@@ -103,7 +110,7 @@
           "audio_capture_reload_before_workflow": false,
           "audio_capture_preserve_graph": true,
           "audio_capture_terminal_settle_seconds": 0.35,
-          "audio_trigger_selector": "button[aria-label=\"朗读\"], button[aria-label*=\"朗读\"], button[data-dbx-name=\"button\"][aria-label*=\"朗读\"], button.voiceButton-GAZh3G, [data-testid*=\"voice\"] button, [class*=\"voice\"] button, button svg, span[data-dbx-name=\"text\"], [role=\"button\"]",
+          "audio_trigger_selector": "button[aria-label=\"朗读\"], button[aria-label*=\"朗读\"], [data-testid*=\"voice\"] button, [class*=\"voice\"] button",
           "audio_trigger_labels": [
             "朗读",
             "语音朗读",
