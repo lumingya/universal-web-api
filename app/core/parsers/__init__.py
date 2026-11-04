@@ -25,6 +25,8 @@ from .lmarena_battle_side_parser import (
     LmarenaBattleSideLeftParser,
     LmarenaBattleSideRightParser,
     LmarenaBattleWinnerParser,
+    LmarenaBattleFastSideLeftParser,
+    LmarenaBattleFastSideRightParser,
 )
 from .lmarena_image_side_left_parser import LmarenaImageSideLeftParser
 from .lmarena_image_side_right_parser import LmarenaImageSideRightParser
@@ -46,6 +48,8 @@ ParserRegistry.register_class(LmarenaSideLeftParser)
 ParserRegistry.register_class(LmarenaBattleWinnerParser)
 ParserRegistry.register_class(LmarenaBattleSideLeftParser)
 ParserRegistry.register_class(LmarenaBattleSideRightParser)
+ParserRegistry.register_class(LmarenaBattleFastSideLeftParser)
+ParserRegistry.register_class(LmarenaBattleFastSideRightParser)
 ParserRegistry.register_class(LmarenaImageSideLeftParser)
 ParserRegistry.register_class(LmarenaImageSideRightParser)
 ParserRegistry.register_class(GrokParser)

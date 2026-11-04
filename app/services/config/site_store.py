@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import time
@@ -91,6 +92,8 @@ class SiteStore:
         self._on_disk: Dict[str, str] = {}
         self._broken: Dict[Path, str] = {}
         self._broken_sites: Dict[Path, str] = {}  # 损坏文件 -> 上次成功加载时对应的站点
+        self._local_files: Dict[str, Path] = {}  # 站点 -> 本地覆盖文件 (*.local.json)
+        self._local_presets: Dict[str, set[str]] = {}  # 站点 -> 本地私有预设名称集合
 
     # ------------------------------------------------------------------ 查询
     def site_files(self) -> List[Path]:
@@ -98,7 +101,18 @@ class SiteStore:
             return []
         return sorted(
             path for path in self.sites_dir.glob("*.json")
-            if path.is_file() and path.name != INDEX_FILE_NAME and not path.name.startswith(".")
+            if path.is_file()
+            and path.name != INDEX_FILE_NAME
+            and not path.name.startswith(".")
+            and not path.name.endswith(".local.json")
+        )
+
+    def local_site_files(self) -> List[Path]:
+        if not self.sites_dir.is_dir():
+            return []
+        return sorted(
+            path for path in self.sites_dir.glob("*.local.json")
+            if path.is_file() and not path.name.startswith(".")
         )
 
     def exists(self) -> bool:
@@ -108,6 +122,12 @@ class SiteStore:
         """目录内容签名（文件名、mtime、大小），用于热重载的变更检测。"""
         entries = []
         for path in self.site_files():
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            entries.append((path.name, stat.st_mtime_ns, stat.st_size))
+        for path in self.local_site_files():
             try:
                 stat = path.stat()
             except OSError:
@@ -181,6 +201,47 @@ class SiteStore:
 
         self._files, self._meta, self._on_disk = files_map, meta, on_disk
         self._broken, self._broken_sites = broken, broken_sites
+
+        # 合并本地私有配置覆盖 (*.local.json)
+        local_files_map: Dict[str, Path] = {}
+        local_presets_map: Dict[str, set[str]] = {}
+        for local_path in self.local_site_files():
+            try:
+                local_payload = json.loads(local_path.read_text(encoding="utf-8-sig"))
+                if not isinstance(local_payload, dict):
+                    continue
+                site = str(local_payload.get("site") or "").strip()
+                if not site:
+                    site = local_path.name[:-len(".local.json")]
+
+                local_cfg = local_payload.get("config") if isinstance(local_payload.get("config"), dict) else local_payload
+                if site in data and isinstance(data[site], dict):
+                    base_cfg = data[site]
+                    if isinstance(local_cfg.get("presets"), dict):
+                        if "presets" not in base_cfg or not isinstance(base_cfg["presets"], dict):
+                            base_cfg["presets"] = {}
+                        for p_name, p_val in local_cfg["presets"].items():
+                            base_cfg["presets"][p_name] = p_val
+                            if site not in local_presets_map:
+                                local_presets_map[site] = set()
+                            local_presets_map[site].add(p_name)
+
+                    for sec in ("selectors", "attachments", "prompt_padding"):
+                        if isinstance(local_cfg.get(sec), dict):
+                            if sec not in base_cfg or not isinstance(base_cfg[sec], dict):
+                                base_cfg[sec] = {}
+                            base_cfg[sec].update(local_cfg[sec])
+
+                    local_files_map[site] = local_path
+                    logger.info(
+                        f"已成功合并本地私有配置覆盖: {local_path.name} -> 站点 {site} "
+                        f"({len(local_presets_map.get(site, set()))} 个私有预设)"
+                    )
+            except Exception as exc:
+                logger.error(f"读取本地覆盖配置文件失败 ({local_path.name}): {exc}")
+
+        self._local_files = local_files_map
+        self._local_presets = local_presets_map
         return data
 
     # ------------------------------------------------------------------ 保存
@@ -193,7 +254,15 @@ class SiteStore:
             for site, config in full_config.items():
                 if not isinstance(config, dict):
                     continue
-                text = canonical_config_text(config)
+
+                # 若存在本地私有预设，写回公共站点文件时将其剥离，防止污染/泄漏
+                target_config = config
+                if site in self._local_presets and isinstance(config.get("presets"), dict):
+                    target_config = copy.deepcopy(config)
+                    for p_name in self._local_presets[site]:
+                        target_config["presets"].pop(p_name, None)
+
+                text = canonical_config_text(target_config)
                 path = self._files.get(site)
                 if path is not None and self._on_disk.get(site) == text and path.is_file():
                     continue
@@ -203,7 +272,7 @@ class SiteStore:
                 if path in self._broken:
                     logger.error(f"站点 {site} 对应的文件 {path.name} 无法解析，为避免覆盖用户手改内容，本次跳过保存")
                     continue
-                payload = build_envelope(site, config, self._meta.get(site) or self._default_meta())
+                payload = build_envelope(site, target_config, self._meta.get(site) or self._default_meta())
                 tmp = path.with_name(path.name + ".tmp")
                 with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
                     handle.write(_dump(payload))

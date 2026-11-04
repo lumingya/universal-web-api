@@ -774,7 +774,7 @@
       dockDragCleanup = window.WorkflowPageGuide.draggable(treeDock, () => state.testExecution.pendingCount === 0);
       pageGuide = window.WorkflowPageGuide.mount({
         studio: treeStudio, editorElements: () => [treeHost, treeDock],
-        onHide: collapseEditor, onSave: doSave,
+        onHide: collapseEditor, onSave: doSave, onPage: () => showEditorMode('page'),
         onAdvanced: path => showEditorMode('canvas', path),
         onTest: () => { showEditorMode('canvas'); treeStudio.tab = 'test'; treeStudio.render(); },
         onTrace: () => { showEditorMode('canvas'); treeStudio.tab = 'test'; treeStudio.render(); },
@@ -2377,6 +2377,9 @@
   registerCleanup(() => window.removeEventListener('resize', handleToolbarResize));
 
     async function doSave() {
+        if(pageGuide && !pageGuide.validateEdits())return;
+        if(pageGuide && ['pending','waiting'].includes(pageGuide.saveStatus))return;
+        pageGuide?.setSaveStatus('pending','正在提交草稿，等待本地写入确认。');
         if (!state.siteConfig) {
             state.siteConfig = { selectors: {}, workflow: [] };
         }
@@ -2405,6 +2408,7 @@
 
         if (shouldPreferBridgeMode()) {
             enqueueBackendAction('save_workflow', savePayload, { trackTestStatus: false });
+            pageGuide?.setSaveStatus('waiting','保存请求已提交；收到本地回执前，草稿仍显示未确认。');
             showToast(`保存请求已提交，等待本地控制台写入配置。${preservedNote.replace(/\n/g, ' ')}`, 'info', 2200);
             return;
         }
@@ -2419,14 +2423,16 @@
             if (response.ok) {
                 const result = await response.json();
                 applyEditorSaveAck({selectors, workflow:newWorkflow});
-                alert(`✅ 保存成功！\n\n已更新 ${steps.length} 个步骤到 ${domain} / ${presetName}${preservedNote}`);
+                alert(`✅ 保存成功！\n\n已更新 ${newWorkflow.length} 个顶层步骤到 ${domain} / ${presetName}${preservedNote}`);
                 console.log('[WorkflowEditor] 保存结果:', result);
             } else {
                 const error = await response.json();
+                pageGuide?.setSaveStatus('error',error.message || error.detail || '保存失败，草稿仍保留。');
                 alert(`❌ 保存失败: ${error.message || error.detail || '未知错误'}`);
             }
         } catch (e) {
             console.error('[WorkflowEditor] 保存异常:', e);
+            pageGuide?.setSaveStatus('error','保存未完成：'+String(e?.message||e));
 
             const message = String(e?.message || e || '');
             if (
@@ -2435,6 +2441,7 @@
                 || message.includes('NetworkError')
             ) {
                 enqueueBackendAction('save_workflow', savePayload, { trackTestStatus: false });
+            pageGuide?.setSaveStatus('waiting','保存请求已提交；收到本地回执前，草稿仍显示未确认。');
                 showToast(`保存请求已提交，等待本地控制台写入配置。`, 'info', 2200);
                 return;
             }
@@ -2593,6 +2600,8 @@
       else if (action?.type === 'test_workflow' || !action) receiveTreeResult(trace, message, success);
       if (action?.type === 'save_workflow' && success) {
         applyEditorSaveAck(action.payload);
+      } else if (action?.type === 'save_workflow') {
+        pageGuide?.setSaveStatus('error',message || '本地保存失败，草稿仍保留。');
       } else if (action?.type === 'test_workflow' || !action) {
         touchTestActivity();
         resumeEditorAfterTest();

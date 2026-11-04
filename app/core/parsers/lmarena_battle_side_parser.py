@@ -21,6 +21,7 @@ class _LmarenaBattleSideParser(ResponseParser):
 
     SIDE_PREFIX = "a"
     SIDE_LABEL = "left"
+    WAIT_BOTH_SIDES = True
 
     def __init__(self) -> None:
         self._accumulated = ""
@@ -126,7 +127,15 @@ class _LmarenaBattleSideParser(ResponseParser):
 
             result["completion_side"] = self._completion_side
 
-            if len(self._completed_sides) >= 2:
+            is_done = False
+            if getattr(self, "WAIT_BOTH_SIDES", True):
+                if len(self._completed_sides) >= 2:
+                    is_done = True
+            else:
+                if self.SIDE_LABEL in self._completed_sides or len(self._completed_sides) >= 2:
+                    is_done = True
+
+            if is_done:
                 self._completed = True
                 result["done"] = True
                 result["completion_side"] = self._completion_side
@@ -417,8 +426,47 @@ class LmarenaBattleSideRightParser(_LmarenaBattleSideParser):
         return "Stream Arena.ai battle right/modelB text; finish when both sides complete"
 
 
+
+class LmarenaBattleFastSideLeftParser(LmarenaBattleSideLeftParser):
+    """Stream left/modelA text and finish immediately when left completes (for pure fetch workflows)."""
+
+    WAIT_BOTH_SIDES = False
+
+    @classmethod
+    def get_id(cls) -> str:
+        return "lmarena_battle_fast_left"
+
+    @classmethod
+    def get_name(cls) -> str:
+        return "Arena.ai Battle Fast Side Left"
+
+    @classmethod
+    def get_description(cls) -> str:
+        return "Stream Arena.ai battle left text; finish immediately when left side completes without waiting for slow models"
+
+
+class LmarenaBattleFastSideRightParser(LmarenaBattleSideRightParser):
+    """Stream right/modelB text and finish immediately when right completes (for pure fetch workflows)."""
+
+    WAIT_BOTH_SIDES = False
+
+    @classmethod
+    def get_id(cls) -> str:
+        return "lmarena_battle_fast_right"
+
+    @classmethod
+    def get_name(cls) -> str:
+        return "Arena.ai Battle Fast Side Right"
+
+    @classmethod
+    def get_description(cls) -> str:
+        return "Stream Arena.ai battle right text; finish immediately when right side completes without waiting for slow models"
+
+
 __all__ = [
     "LmarenaBattleWinnerParser",
     "LmarenaBattleSideLeftParser",
     "LmarenaBattleSideRightParser",
+    "LmarenaBattleFastSideLeftParser",
+    "LmarenaBattleFastSideRightParser",
 ]

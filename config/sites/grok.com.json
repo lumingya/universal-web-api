@@ -162,9 +162,9 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0.0,
+          "post_upload_settle": 0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3.0,
+          "upload_signal_grace": 3,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -187,8 +187,8 @@
             "require_attachment_present": false,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": true,
-            "idle_timeout": 8.0,
-            "hard_max_wait": 90.0
+            "idle_timeout": 8,
+            "hard_max_wait": 90
           },
           "attachments": {
             "enabled": true,

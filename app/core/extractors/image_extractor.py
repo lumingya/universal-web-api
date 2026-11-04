@@ -177,13 +177,37 @@ class ImageExtractor:
             }
         };
 
+        const isIgnoredUiOrAvatarNode = (el) => {
+            if (!el || !(el instanceof Element)) return false;
+            try {
+                if (el.closest(
+                    'user-profile-picture, .mavatar-container, .mavatar-image, [class*="mavatar"], ' +
+                    'bard-sidenav, side-navigation-v2, .mystuff-side-nav, header, [class*="gb_"], ' +
+                    '[data-test-id="side-nav-sparkle-button"], .side-nav-sparkle-button, .avatar, [class*="avatar"]'
+                )) {
+                    return true;
+                }
+                const alt = String(el.getAttribute('alt') || '').toLowerCase();
+                const aria = String(el.getAttribute('aria-label') || '').toLowerCase();
+                if (alt.includes('个人资料') || alt.includes('profile') || alt.includes('avatar') ||
+                    aria.includes('个人资料') || aria.includes('profile') || aria.includes('avatar')) {
+                    return true;
+                }
+                const s = String(el.currentSrc || el.src || '').toLowerCase();
+                if (s.includes('googleusercontent.com/a/') || s.includes('google.com/u/0/ogw/') || s.includes('ssl.gstatic.com/gb/')) {
+                    return true;
+                }
+            } catch {}
+            return false;
+        };
+
         const collectNodes = (roots) => {
             const scopedNodes = [];
             const seenNodes = new Set();
             const pushNode = (value) => {
                 if (!(value instanceof Element)) return;
                 if (seenNodes.has(value)) return;
-                if (isUserUploadNode(value)) return;
+                if (isUserUploadNode(value) || isIgnoredUiOrAvatarNode(value)) return;
                 seenNodes.add(value);
                 scopedNodes.push(value);
             };
@@ -439,7 +463,14 @@ class ImageExtractor:
                 _is_hidden: hidden,
                 _source: windowedOriginalSource ? "image_window_original_src" : ""
             };
-        }).filter(x => x.src);  // 过滤无 src 的
+        }).filter(x => {
+            if (!x.src) return false;
+            const s = String(x.src || "").toLowerCase();
+            if (s.includes("googleusercontent.com/a/") || s.includes("google.com/u/0/ogw/") || s.includes("ssl.gstatic.com/gb/")) {
+                return false;
+            }
+            return true;
+        });
 
         const windowedPlaceholderCount = items.filter(item => item._windowed_placeholder).length;
         if (windowedPlaceholderCount > 0) {
