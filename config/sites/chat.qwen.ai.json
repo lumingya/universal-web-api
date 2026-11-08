@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "site": "chat.qwen.ai",
-  "adapter_version": "2026.09.26",
+  "adapter_version": "2026.11.09",
   "min_app_version": "3.0.0",
   "config": {
     "presets": {
@@ -14,7 +14,7 @@
           "message_wrapper": ".qwen-chat-message, .chat-response-message, .chat-user-message, .chat-item, [data-role]",
           "generating_indicator": "button[aria-label*=\"停止\"], button[aria-label*=\"Stop\"]",
           "file_input": "input[type=\"file\"]",
-          "drop_zone": null,
+          "drop_zone": "div.message-input-container",
           "下拉框": "#qwen-chat-header-left .ant-dropdown-trigger",
           "3.6max": "//div[contains(@class, 'model-item') and .//span[text()='Qwen3.6-Max-Preview']]"
         },
@@ -169,9 +169,9 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -181,7 +181,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 6,
+            "attachment_observe_window": 6.0,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_cooldown_window": 1.5,
@@ -226,11 +226,27 @@
             "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
-            "idle_timeout": 8,
-            "hard_max_wait": 90,
+            "idle_timeout": 8.0,
+            "hard_max_wait": 90.0,
             "ignored_busy_text_markers": [
               "thinking"
             ]
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "image_clipboard",
+              "js_drop",
+              "cdp_drop",
+              "file_clipboard",
+              "file_input"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -239,20 +255,6 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
-        },
-        "attachments": {
-          "enabled": true,
-          "transport_order": [
-            "image_clipboard",
-            "file_clipboard",
-            "file_input"
-          ],
-          "attachment_selectors": [
-            ".message-input-column-file",
-            ".file-card-list",
-            ".vision-item-image",
-            ".fileitem-btn"
-          ]
         }
       },
       "3.6 max": {
@@ -264,7 +266,7 @@
           "message_wrapper": ".qwen-chat-message, .chat-response-message, .chat-user-message, .chat-item, [data-role]",
           "generating_indicator": "button[aria-label*=\"停止\"], button[aria-label*=\"Stop\"]",
           "file_input": "input[type=\"file\"]",
-          "drop_zone": null,
+          "drop_zone": "div.message-input-container",
           "下拉框": "#qwen-chat-header-left .ant-dropdown-trigger",
           "3.6max": "//div[contains(@class, 'model-item') and .//span[text()='Qwen3.6-Max-Preview']]"
         },
@@ -431,9 +433,9 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -443,7 +445,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 6,
+            "attachment_observe_window": 6.0,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_cooldown_window": 1.5,
@@ -492,11 +494,27 @@
             "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
-            "idle_timeout": 8,
-            "hard_max_wait": 90,
+            "idle_timeout": 8.0,
+            "hard_max_wait": 90.0,
             "ignored_busy_text_markers": [
               "thinking"
             ]
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "image_clipboard",
+              "js_drop",
+              "cdp_drop",
+              "file_clipboard",
+              "file_input"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -505,20 +523,6 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
-        },
-        "attachments": {
-          "enabled": true,
-          "transport_order": [
-            "image_clipboard",
-            "file_clipboard",
-            "file_input"
-          ],
-          "attachment_selectors": [
-            ".message-input-column-file",
-            ".file-card-list",
-            ".vision-item-image",
-            ".fileitem-btn"
-          ]
         }
       },
       "3.8": {
@@ -530,7 +534,7 @@
           "message_wrapper": ".qwen-chat-message, .chat-response-message, .chat-user-message, .chat-item, [data-role]",
           "generating_indicator": "button[aria-label*=\"停止\"], button[aria-label*=\"Stop\"]",
           "file_input": "input[type=\"file\"]",
-          "drop_zone": null,
+          "drop_zone": "div.message-input-container",
           "下拉框": "#qwen-chat-header-left .ant-dropdown-trigger",
           "展开更多模型": "//div[contains(text(), '展开更多模型')]",
           "3.7max": "//div[@role='option'][.//span[text()='Qwen3.8-Max-Preview']]"
@@ -686,9 +690,9 @@
           "error_hint_text": "文件内容为需要回复的上下文，按上下文回复",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -698,7 +702,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 6,
+            "attachment_observe_window": 6.0,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_cooldown_window": 1.5,
@@ -747,11 +751,27 @@
             "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
-            "idle_timeout": 8,
-            "hard_max_wait": 90,
+            "idle_timeout": 8.0,
+            "hard_max_wait": 90.0,
             "ignored_busy_text_markers": [
               "thinking"
             ]
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "image_clipboard",
+              "js_drop",
+              "cdp_drop",
+              "file_clipboard",
+              "file_input"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -760,20 +780,6 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
-        },
-        "attachments": {
-          "enabled": true,
-          "transport_order": [
-            "image_clipboard",
-            "file_clipboard",
-            "file_input"
-          ],
-          "attachment_selectors": [
-            ".message-input-column-file",
-            ".file-card-list",
-            ".vision-item-image",
-            ".fileitem-btn"
-          ]
         }
       }
     },

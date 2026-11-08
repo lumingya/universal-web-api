@@ -24,10 +24,10 @@
     },
     "arena.ai": {
       "file": "arena.ai.json",
-      "adapter_version": "2026.10.10",
+      "adapter_version": "2026.11.09",
       "min_app_version": "3.0.1",
-      "config_sha256": "638303bef47e06ec5863398fd5c64bd39125746e90a53dd5cda07112360e24c7",
-      "file_sha256": "9fb9554446809ded1b978b98585272215146d1fc778a9208ab1f22aa17c02bf5"
+      "config_sha256": "b2b9c09027e2884d48ff70a04d01a35c437ced753ee6cf60829f5e964dcb1b1e",
+      "file_sha256": "d3746d65b3ea2921720c3ac71faeb59b56b6f8ed3d45ff77d89abbbbed20d756"
     },
     "chat.deepseek.com": {
       "file": "chat.deepseek.com.json",
@@ -38,10 +38,10 @@
     },
     "chat.qwen.ai": {
       "file": "chat.qwen.ai.json",
-      "adapter_version": "2026.09.26",
+      "adapter_version": "2026.11.09",
       "min_app_version": "3.0.0",
-      "config_sha256": "99251efe060a358cad204a959cf5d2dad223847157ae25d54110f79bdf9241a4",
-      "file_sha256": "57972cc9b62a47deb2f053b48291e5e4378339e97db8fd861cfcf8fd90121149"
+      "config_sha256": "629fd22eb2dc2156bd1576a7de8e8679e2936f77cab39a3140366d5dfadacf3d",
+      "file_sha256": "f5023f319ac2a25028b0a3bfd9eef27d48d5799a78e045b335b1d61a1529817b"
     },
     "chatglm.cn": {
       "file": "chatglm.cn.json",
@@ -68,15 +68,15 @@
       "file": "gemini.google.com.json",
       "adapter_version": "2026.09.26",
       "min_app_version": "3.0.0",
-      "config_sha256": "b6f313fa6440203917d392623eeeebc1dd6fb90bbc0f032ca0f213239aa98672",
-      "file_sha256": "81733dd6716c6254641b3b36a73d3e302fdfc2f0d8a8de89cd00f506d8fc14b7"
+      "config_sha256": "074a01b6e1c0df4964698eae7d0d349f3934562cbfc26417022fcb78f6fa4c3f",
+      "file_sha256": "a6825c1eeb6c910206e3e8a4a27d41e7d6ef280410fe7a9261d2048b94678e61"
     },
     "grok.com": {
       "file": "grok.com.json",
       "adapter_version": "2026.09.26",
       "min_app_version": "3.0.0",
-      "config_sha256": "d47f0c92b4eb2a9c4775a482dab4ef7ee75f2c00b619913d8a6477194ce1cfe0",
-      "file_sha256": "5ba351b92f10a47962395af3d09429e76f709c164368ca955a90f1d287bdc9c6"
+      "config_sha256": "aed72e97660c84a613b6d6274d9de7c8cabfaa1fac02901493f9bdf5a36da083",
+      "file_sha256": "68264f7e77e69c31b7dce73a84c27eea5c546fc663ae002b23abe324c5c39340"
     },
     "www.doubao.com": {
       "file": "www.doubao.com.json",

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "site": "arena.ai",
-  "adapter_version": "2026.10.10",
+  "adapter_version": "2026.11.09",
   "min_app_version": "3.0.1",
   "config": {
     "presets": {
@@ -198,12 +198,26 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "file_input",
+              "cdp_drop",
+              "image_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -212,22 +226,6 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
-        },
-        "attachments": {
-          "enabled": true,
-          "max_count": 8,
-          "max_file_mb": 20,
-          "max_total_mb": 50,
-          "allowed_types": [
-            "image",
-            "file",
-            "document"
-          ],
-          "transport_order": [
-            "file_input",
-            "cdp_drop",
-            "image_clipboard"
-          ]
         }
       },
       "万能直连-通用生图": {
@@ -427,12 +425,26 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "file_input",
+              "cdp_drop",
+              "image_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -441,22 +453,6 @@
           "segments_per_side": 12,
           "random_insert_enabled": true,
           "random_insert_chars": "。，、’"
-        },
-        "attachments": {
-          "enabled": true,
-          "max_count": 8,
-          "max_file_mb": 20,
-          "max_total_mb": 50,
-          "allowed_types": [
-            "image",
-            "file",
-            "document"
-          ],
-          "transport_order": [
-            "file_input",
-            "cdp_drop",
-            "image_clipboard"
-          ]
         }
       },
       "主预设-直连模式": {
@@ -660,9 +656,9 @@
           "error_hint_text": "超过输入上限，本次请求中断",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -672,7 +668,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 6,
+            "attachment_observe_window": 6.0,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_cooldown_window": 1.5,
@@ -687,6 +683,20 @@
             "trust_network_activity": true,
             "trust_generating_indicator": true,
             "trust_send_disabled_with_input_shrink": true
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "file_input",
+              "cdp_drop",
+              "image_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -695,22 +705,6 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
-        },
-        "attachments": {
-          "enabled": true,
-          "max_count": 8,
-          "max_file_mb": 20,
-          "max_total_mb": 50,
-          "allowed_types": [
-            "image",
-            "file",
-            "document"
-          ],
-          "transport_order": [
-            "file_input",
-            "cdp_drop",
-            "image_clipboard"
-          ]
         }
       },
       "direct-预注入-图片模式": {
@@ -933,12 +927,26 @@
           "error_hint_text": "超过输入上限，本次请求中断",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "file_input",
+              "cdp_drop",
+              "image_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -947,22 +955,6 @@
           "segments_per_side": 0,
           "random_insert_enabled": true,
           "random_insert_chars": "`~-_=+'\"\\|[{]}"
-        },
-        "attachments": {
-          "enabled": true,
-          "max_count": 8,
-          "max_file_mb": 20,
-          "max_total_mb": 50,
-          "allowed_types": [
-            "image",
-            "file",
-            "document"
-          ],
-          "transport_order": [
-            "file_input",
-            "cdp_drop",
-            "image_clipboard"
-          ]
         }
       },
       "主预设-双栏模式": {
@@ -1138,12 +1130,26 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "file_input",
+              "cdp_drop",
+              "image_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -1152,22 +1158,6 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
-        },
-        "attachments": {
-          "enabled": true,
-          "max_count": 8,
-          "max_file_mb": 20,
-          "max_total_mb": 50,
-          "allowed_types": [
-            "image",
-            "file",
-            "document"
-          ],
-          "transport_order": [
-            "file_input",
-            "cdp_drop",
-            "image_clipboard"
-          ]
         }
       },
       "主预设-图片模式": {
@@ -1386,12 +1376,26 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "file_input",
+              "cdp_drop",
+              "image_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -1400,22 +1404,6 @@
           "segments_per_side": 0,
           "random_insert_enabled": true,
           "random_insert_chars": "`~-_=+'\"\\|[{]}"
-        },
-        "attachments": {
-          "enabled": true,
-          "max_count": 8,
-          "max_file_mb": 20,
-          "max_total_mb": 50,
-          "allowed_types": [
-            "image",
-            "file",
-            "document"
-          ],
-          "transport_order": [
-            "file_input",
-            "cdp_drop",
-            "image_clipboard"
-          ]
         }
       },
       "Battle-左侧": {
@@ -1600,9 +1588,9 @@
           "error_hint_text": "超过输入上限，本次请求中断",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -1612,7 +1600,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 6,
+            "attachment_observe_window": 6.0,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_cooldown_window": 1.5,
@@ -1627,6 +1615,20 @@
             "trust_network_activity": true,
             "trust_generating_indicator": true,
             "trust_send_disabled_with_input_shrink": true
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "file_input",
+              "cdp_drop",
+              "image_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -1635,22 +1637,6 @@
           "segments_per_side": 12,
           "random_insert_enabled": true,
           "random_insert_chars": "，。、、’"
-        },
-        "attachments": {
-          "enabled": true,
-          "max_count": 8,
-          "max_file_mb": 20,
-          "max_total_mb": 50,
-          "allowed_types": [
-            "image",
-            "file",
-            "document"
-          ],
-          "transport_order": [
-            "file_input",
-            "cdp_drop",
-            "image_clipboard"
-          ]
         }
       },
       "Battle-右侧": {
@@ -1835,9 +1821,9 @@
           "error_hint_text": "超过输入上限，本次请求中断",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -1847,7 +1833,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 6,
+            "attachment_observe_window": 6.0,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_cooldown_window": 1.5,
@@ -1862,6 +1848,20 @@
             "trust_network_activity": true,
             "trust_generating_indicator": true,
             "trust_send_disabled_with_input_shrink": true
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "file_input",
+              "cdp_drop",
+              "image_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -1870,22 +1870,6 @@
           "segments_per_side": 12,
           "random_insert_enabled": true,
           "random_insert_chars": "，。、；‘、’"
-        },
-        "attachments": {
-          "enabled": true,
-          "max_count": 8,
-          "max_file_mb": 20,
-          "max_total_mb": 50,
-          "allowed_types": [
-            "image",
-            "file",
-            "document"
-          ],
-          "transport_order": [
-            "file_input",
-            "cdp_drop",
-            "image_clipboard"
-          ]
         }
       },
       "Battle-赢家优先（非流式）": {
@@ -2114,9 +2098,9 @@
           "error_hint_text": "超过输入上限，本次请求中断",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -2126,7 +2110,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 6,
+            "attachment_observe_window": 6.0,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_cooldown_window": 1.5,
@@ -2141,6 +2125,20 @@
             "trust_network_activity": true,
             "trust_generating_indicator": true,
             "trust_send_disabled_with_input_shrink": true
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "file_input",
+              "cdp_drop",
+              "image_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -2149,22 +2147,6 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
-        },
-        "attachments": {
-          "enabled": true,
-          "max_count": 8,
-          "max_file_mb": 20,
-          "max_total_mb": 50,
-          "allowed_types": [
-            "image",
-            "file",
-            "document"
-          ],
-          "transport_order": [
-            "file_input",
-            "cdp_drop",
-            "image_clipboard"
-          ]
         }
       },
       "主预设-图片模式-右侧": {
@@ -2390,9 +2372,9 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -2402,7 +2384,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 6,
+            "attachment_observe_window": 6.0,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_cooldown_window": 1.5,
@@ -2417,6 +2399,20 @@
             "trust_network_activity": true,
             "trust_generating_indicator": true,
             "trust_send_disabled_with_input_shrink": true
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "file_input",
+              "cdp_drop",
+              "image_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -2425,22 +2421,6 @@
           "segments_per_side": 0,
           "random_insert_enabled": true,
           "random_insert_chars": "`~-_=+'\"\\|[{]}"
-        },
-        "attachments": {
-          "enabled": true,
-          "max_count": 8,
-          "max_file_mb": 20,
-          "max_total_mb": 50,
-          "allowed_types": [
-            "image",
-            "file",
-            "document"
-          ],
-          "transport_order": [
-            "file_input",
-            "cdp_drop",
-            "image_clipboard"
-          ]
         }
       },
       "direct-图片模式-文生图": {
@@ -2675,12 +2655,26 @@
           "error_hint_text": "超过输入上限，本次请求中断",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "file_input",
+              "cdp_drop",
+              "image_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -2689,22 +2683,6 @@
           "segments_per_side": 0,
           "random_insert_enabled": true,
           "random_insert_chars": "`~-_=+'\"\\|[{]}"
-        },
-        "attachments": {
-          "enabled": true,
-          "max_count": 8,
-          "max_file_mb": 20,
-          "max_total_mb": 50,
-          "allowed_types": [
-            "image",
-            "file",
-            "document"
-          ],
-          "transport_order": [
-            "file_input",
-            "cdp_drop",
-            "image_clipboard"
-          ]
         }
       }
     },
