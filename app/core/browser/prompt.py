@@ -363,7 +363,7 @@ class BrowserPromptMixin:
             pass
 
         try:
-            cfg_path = "config/browser_config.json"
+            cfg_path = str(BrowserConstants._resolve_config_file())
             if os.path.exists(cfg_path):
                 with open(cfg_path, "r", encoding="utf-8") as f:
                     data = json.load(f) or {}

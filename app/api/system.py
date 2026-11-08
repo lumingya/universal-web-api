@@ -1141,7 +1141,7 @@ async def import_settings_backup(
                 imported_sections.append("commands_local")
 
             if "browser_constants" in files:
-                write_import_json(Path("config/browser_config.json"), files["browser_constants"])
+                write_import_json(_browser_config_path(), files["browser_constants"])
                 imported_sections.append("browser_constants")
 
             if "extractors" in files:
