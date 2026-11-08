@@ -11,7 +11,7 @@ Observed stream traits:
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import logger
 from .base import ResponseParser
@@ -24,6 +24,7 @@ class DeepSeekParser(ResponseParser):
         self._last_raw_length = 0
         self._pending = ""
         self._fragment_types: List[str] = []
+        self._fragment_ids: List[Any] = []
         self._fragment_contents: List[str] = []
         self._current_fragment_type = ""
         self._current_fragment_index = -1
@@ -66,6 +67,7 @@ class DeepSeekParser(ResponseParser):
         self._last_raw_response = ""
         self._pending = ""
         self._fragment_types = []
+        self._fragment_ids = []
         self._fragment_contents = []
         self._current_fragment_type = ""
         self._current_fragment_index = -1
@@ -145,8 +147,10 @@ class DeepSeekParser(ResponseParser):
         if self._is_done_signal(path, value):
             return "", self._can_accept_done_signal()
 
-        if self._is_fragment_append(path, operation, value):
-            return self._register_fragments(value), False
+        if self._is_fragment_list_update(path, value):
+            return self._sync_fragments(
+                value, append=self._is_fragment_append(path, operation, value)
+            ), False
 
         if self._is_fragment_content_patch(path, value):
             fragment_index = self._resolve_fragment_index(path)
@@ -182,8 +186,10 @@ class DeepSeekParser(ResponseParser):
                 saw_done_signal = True
                 continue
 
-            if self._is_fragment_append(path, operation, value):
-                fragment_content = self._register_fragments(value)
+            if self._is_fragment_list_update(path, value):
+                fragment_content = self._sync_fragments(
+                    value, append=self._is_fragment_append(path, operation, value)
+                )
                 if fragment_content:
                     content_parts.append(fragment_content)
                 continue
@@ -220,6 +226,7 @@ class DeepSeekParser(ResponseParser):
 
             fragment_type = str(fragment.get("type", "") or "").upper()
             self._fragment_types.append(fragment_type)
+            self._fragment_ids.append(fragment.get("id"))
             self._fragment_contents.append("")
             self._current_fragment_index = len(self._fragment_types) - 1
             if fragment_type:
@@ -234,7 +241,134 @@ class DeepSeekParser(ResponseParser):
 
         return "".join(content_parts)
 
+    def _sync_fragments(self, fragments: List[Dict[str, Any]], *, append: bool) -> str:
+
+        """Merge a fragment-list payload into the parser state.
+
+
+
+        DeepSeek sends the fragment list as ``{"p": "response/fragments", "v": [...]}``
+
+        both with and without the ``"o": "APPEND"`` marker. Once the marker went
+
+        missing the payload became a *snapshot* of every fragment (THINK + RESPONSE),
+
+        so appending it blindly would duplicate text: match fragments by ``id`` and
+
+        emit only the growth of each one.
+
+        """
+
+        if append:
+
+            return self._register_fragments(fragments)
+
+
+
+        content_parts: List[str] = []
+
+        for position, fragment in enumerate(fragments):
+
+            if not isinstance(fragment, dict):
+
+                continue
+
+
+
+            fragment_type = str(fragment.get("type", "") or "").upper()
+
+            fragment_id = fragment.get("id")
+
+            text = fragment.get("content", "")
+
+            if not isinstance(text, str):
+
+                text = ""
+
+
+
+            index = self._find_fragment_index(fragment_id, fragment_type, position)
+
+            if index is None:
+
+                self._fragment_types.append(fragment_type)
+
+                self._fragment_ids.append(fragment_id)
+
+                self._fragment_contents.append(text)
+
+                index = len(self._fragment_types) - 1
+
+                delta_text = text
+
+            else:
+
+                merged_text, delta_text = self._merge_fragment_text(
+
+                    self._fragment_contents[index], text
+
+                )
+
+                self._fragment_contents[index] = merged_text
+
+                if fragment_id is not None:
+
+                    self._fragment_ids[index] = fragment_id
+
+
+
+            self._current_fragment_index = index
+
+            if fragment_type:
+
+                self._current_fragment_type = fragment_type
+
+
+
+            if delta_text and self._should_emit_fragment_text(fragment_type):
+
+                self._mark_visible_response_text(fragment_type, delta_text)
+
+                content_parts.append(delta_text)
+
+
+
+        return "".join(content_parts)
+
+
+
+    def _find_fragment_index(
+
+        self, fragment_id: Any, fragment_type: str, position: int
+
+    ) -> Optional[int]:
+
+        """Locate an existing fragment: by id when present, else by position+type."""
+
+        if fragment_id is not None:
+
+            for index, existing_id in enumerate(self._fragment_ids):
+
+                if existing_id == fragment_id:
+
+                    return index
+
+            return None
+
+
+
+        if 0 <= position < len(self._fragment_types):
+
+            if self._fragment_types[position] == fragment_type:
+
+                return position
+
+        return None
+
+
+
     def _resolve_fragment_index(self, path: str) -> int:
+
         marker = "response/fragments/"
         if marker not in path or not self._fragment_types:
             return self._current_fragment_index
@@ -309,6 +443,13 @@ class DeepSeekParser(ResponseParser):
             return incoming, incoming[common_prefix_len:]
 
         return previous + incoming, incoming
+
+    @staticmethod
+    def _is_fragment_list_update(path: str, value: Any) -> bool:
+        """True for a fragment-list payload, with or without an operation marker."""
+        if not isinstance(value, list):
+            return False
+        return path in {"response/fragments", "fragments"}
 
     @staticmethod
     def _is_fragment_append(path: str, operation: str, value: Any) -> bool:
@@ -404,6 +545,7 @@ class DeepSeekParser(ResponseParser):
         return {
             "parser": self.get_id(),
             "fragment_types": list(self._fragment_types),
+            "fragment_ids": list(self._fragment_ids),
             "fragment_lengths": [len(item) for item in self._fragment_contents],
             "current_fragment_type": self._current_fragment_type,
             "current_fragment_index": self._current_fragment_index,
