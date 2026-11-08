@@ -26,8 +26,10 @@ from app.utils.remote_resource import (
 
 
 DEFAULT_OFFICIAL_REPO = "lumingya/universal-web-api"
+from app.core.config_parts.paths import PROJECT_ROOT as _PATH_PROJECT_ROOT
+
 OFFICIAL_CONFIG_CACHE_DIR = (
-    Path(getattr(ConfigConstants, "_PROJECT_ROOT", "") or os.getcwd())
+    Path(getattr(ConfigConstants, "_PROJECT_ROOT", "") or str(_PATH_PROJECT_ROOT))
     / "temp"
     / "official_config_cache"
 )
@@ -43,7 +45,7 @@ def _utc_now_text() -> str:
 
 
 def _official_config_relative_path() -> str:
-    project_root = getattr(ConfigConstants, "_PROJECT_ROOT", "") or os.getcwd()
+    project_root = getattr(ConfigConstants, "_PROJECT_ROOT", "") or str(_PATH_PROJECT_ROOT)
     return os.path.relpath(ConfigConstants.CONFIG_FILE, project_root).replace("\\", "/")
 
 

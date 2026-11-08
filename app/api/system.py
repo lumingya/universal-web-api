@@ -1149,7 +1149,8 @@ async def import_settings_backup(
                 imported_sections.append("extractors")
 
             if "update_preserve" in files:
-                remember_file(Path("config") / "update_settings.json")
+                from app.core.config_parts.paths import config_path as _uwa_config_path
+                remember_file(_uwa_config_path("update_settings.json"))
                 save_update_preserve_settings(files["update_preserve"])
                 imported_sections.append("update_preserve")
 

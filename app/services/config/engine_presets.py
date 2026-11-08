@@ -455,7 +455,8 @@ class ConfigPresetsMixin:
         if not target:
             return 0
         from pathlib import Path
-        config_path = Path("config/preset_overrides.local.json")
+        from app.core.config_parts.paths import config_path as _uwa_config_path
+        config_path = _uwa_config_path("preset_overrides.local.json")
         if not config_path.exists():
             return 0
         from app.utils.site_url import extract_remote_site_domain

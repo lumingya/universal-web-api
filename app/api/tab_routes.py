@@ -317,8 +317,10 @@ _route_round_robin_lock = threading.Lock()
 _browser_config_lock = threading.RLock()
 _model_name_overrides_lock = threading.RLock()
 _preset_overrides_lock = threading.RLock()
-MODEL_NAME_OVERRIDES_PATH = Path("config/model_name_overrides.local.json")
-PRESET_OVERRIDES_PATH = Path("config/preset_overrides.local.json")
+from app.core.config_parts.paths import config_path as _uwa_config_path
+
+MODEL_NAME_OVERRIDES_PATH = _uwa_config_path("model_name_overrides.local.json")
+PRESET_OVERRIDES_PATH = _uwa_config_path("preset_overrides.local.json")
 
 
 async def _cleanup_route_worker_thread(

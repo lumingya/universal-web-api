@@ -429,8 +429,9 @@ class RequestManager:
 
         self._max_history = 100
 
-        self._stats_file = "config/app_stats.json"
-        self._history_file = "config/request_history.json"
+        from app.core.config_parts.paths import config_path as _uwa_config_path
+        self._stats_file = str(_uwa_config_path("app_stats.json"))
+        self._history_file = str(_uwa_config_path("request_history.json"))
         # R2-5：单例被重新初始化（测试会这样做）时，丢弃上一次缓存的存储连接，按当前路径/环境重新打开
         previous_store = getattr(self, "_store", None)
         if previous_store is not None:
@@ -478,7 +479,8 @@ class RequestManager:
         if store is None:
             from app.services.storage.runtime_store import RuntimeStore
 
-            history_file = getattr(self, "_history_file", "config/request_history.json")
+            from app.core.config_parts.paths import config_path as _uwa_config_path
+            history_file = getattr(self, "_history_file", "") or str(_uwa_config_path("request_history.json"))
             path = os.getenv("RUNTIME_DB_PATH") or os.path.join(os.path.dirname(history_file) or ".", "runtime.sqlite3")
             store = RuntimeStore(path)
             self._store = store

@@ -498,7 +498,8 @@ class DeepSeekParser(ResponseParser):
             **self.export_debug_data(raw_response),
             "exported_at": int(time.time()),
         }
-        path = Path("logs") / "deepseek_parser_debug.json"
+        from app.core.config_parts.paths import LOGS_DIR
+        path = LOGS_DIR / "deepseek_parser_debug.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
