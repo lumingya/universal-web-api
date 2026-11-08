@@ -242,133 +242,69 @@ class DeepSeekParser(ResponseParser):
         return "".join(content_parts)
 
     def _sync_fragments(self, fragments: List[Dict[str, Any]], *, append: bool) -> str:
-
         """Merge a fragment-list payload into the parser state.
 
-
-
         DeepSeek sends the fragment list as ``{"p": "response/fragments", "v": [...]}``
-
         both with and without the ``"o": "APPEND"`` marker. Once the marker went
-
         missing the payload became a *snapshot* of every fragment (THINK + RESPONSE),
-
         so appending it blindly would duplicate text: match fragments by ``id`` and
-
         emit only the growth of each one.
-
         """
-
         if append:
-
             return self._register_fragments(fragments)
 
-
-
         content_parts: List[str] = []
-
         for position, fragment in enumerate(fragments):
-
             if not isinstance(fragment, dict):
-
                 continue
 
-
-
             fragment_type = str(fragment.get("type", "") or "").upper()
-
             fragment_id = fragment.get("id")
-
             text = fragment.get("content", "")
-
             if not isinstance(text, str):
-
                 text = ""
 
-
-
             index = self._find_fragment_index(fragment_id, fragment_type, position)
-
             if index is None:
-
                 self._fragment_types.append(fragment_type)
-
                 self._fragment_ids.append(fragment_id)
-
                 self._fragment_contents.append(text)
-
                 index = len(self._fragment_types) - 1
-
                 delta_text = text
-
             else:
-
                 merged_text, delta_text = self._merge_fragment_text(
-
                     self._fragment_contents[index], text
-
                 )
-
                 self._fragment_contents[index] = merged_text
-
                 if fragment_id is not None:
-
                     self._fragment_ids[index] = fragment_id
 
-
-
             self._current_fragment_index = index
-
             if fragment_type:
-
                 self._current_fragment_type = fragment_type
 
-
-
             if delta_text and self._should_emit_fragment_text(fragment_type):
-
                 self._mark_visible_response_text(fragment_type, delta_text)
-
                 content_parts.append(delta_text)
-
-
 
         return "".join(content_parts)
 
-
-
     def _find_fragment_index(
-
         self, fragment_id: Any, fragment_type: str, position: int
-
     ) -> Optional[int]:
-
         """Locate an existing fragment: by id when present, else by position+type."""
-
         if fragment_id is not None:
-
             for index, existing_id in enumerate(self._fragment_ids):
-
                 if existing_id == fragment_id:
-
                     return index
-
             return None
 
-
-
         if 0 <= position < len(self._fragment_types):
-
             if self._fragment_types[position] == fragment_type:
-
                 return position
-
         return None
 
-
-
     def _resolve_fragment_index(self, path: str) -> int:
-
         marker = "response/fragments/"
         if marker not in path or not self._fragment_types:
             return self._current_fragment_index
