@@ -9,12 +9,34 @@ from typing import Any, Dict, List, Optional
 from .env_config import AppConfig, PROJECT_ROOT
 
 
+def _resolve_browser_config_file() -> Path:
+    """Resolve config/browser_config.json without trusting the process CWD.
+
+    The sidecar is launched by the runtime manager with an arbitrary working
+    directory (not the uwa root), so the historical relative path
+    Path("config/browser_config.json") never existed at runtime: every limit
+    silently fell back to the hard-coded defaults (MAX_MESSAGES_COUNT=100).
+    Resolve against PROJECT_ROOT first, then fall back to the CWD.
+    """
+    candidates = (
+        PROJECT_ROOT / "config" / "browser_config.json",
+        Path("config") / "browser_config.json",
+    )
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return candidate
+        except OSError:
+            continue
+    return candidates[0]
+
+
 class BrowserConstants:
     """浏览器相关常量（从 JSON 文件加载，支持热重载）"""
     
     # ===== 配置缓存 =====
     _config: Optional[Dict] = None
-    _config_file = Path("config/browser_config.json")
+    _config_file = _resolve_browser_config_file()
     
     # ===== 默认值字典 =====
     _DEFAULTS = {
@@ -73,8 +95,8 @@ class BrowserConstants:
         'STREAM_CONTENT_SHRINK_TOLERANCE': 3,
         'STREAM_STABLE_COUNT_THRESHOLD': 5,
         'STREAM_SILENCE_THRESHOLD_FALLBACK': 10.0,
-        'MAX_MESSAGE_LENGTH': 100000,
-        'MAX_MESSAGES_COUNT': 100,
+        'MAX_MESSAGE_LENGTH': 1000000,
+        'MAX_MESSAGES_COUNT': 1000,
         'TEXT_INPUT_CHUNK_SIZE': 30000,
         'STREAM_USER_MSG_WAIT': 1.5,
         'STREAM_PRE_BASELINE_DELAY': 0.3,
@@ -171,8 +193,8 @@ class BrowserConstants:
     STREAM_SILENCE_THRESHOLD_FALLBACK = 10.0
     
     # 输入验证
-    MAX_MESSAGE_LENGTH = 100000
-    MAX_MESSAGES_COUNT = 100
+    MAX_MESSAGE_LENGTH = 1000000
+    MAX_MESSAGES_COUNT = 1000
 
     # 附件/图片上传就绪判定
     ATTACHMENT_READY_IDLE_TIMEOUT = 8.0
@@ -220,6 +242,7 @@ class BrowserConstants:
     @classmethod
     def _load_config(cls):
         """从文件加载配置"""
+        cls._config_file = _resolve_browser_config_file()
         if cls._config_file.exists():
             try:
                 with open(cls._config_file, 'r', encoding='utf-8') as f:

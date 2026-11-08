@@ -7,6 +7,20 @@ from typing import Any, Tuple, Optional, List
 from .browser_constants import BrowserConstants
 
 
+def _browser_limit(key: str, default: int) -> int:
+    """Effective value of a browser constant: JSON config first, then default.
+
+    BrowserConstants.MAX_MESSAGES_COUNT is only a class-attribute snapshot taken
+    at import time; when the config file is missing or hot-reloaded it goes
+    stale, so read through get() instead.
+    """
+    try:
+        value = int(BrowserConstants.get(key))
+    except (TypeError, ValueError):
+        value = 0
+    return value if value > 0 else int(default)
+
+
 class MessageValidator:
     """消息验证器"""
     
@@ -99,7 +113,7 @@ class MessageValidator:
             return False, "messages 不能为空列表", None
         
         message_count = len(messages)
-        max_messages = int(BrowserConstants.MAX_MESSAGES_COUNT)
+        max_messages = _browser_limit("MAX_MESSAGES_COUNT", 1000)
         if message_count > max_messages:
             return False, (
                 f"消息数量超过限制（当前 {message_count} 条，最大允许 {max_messages} 条）"
@@ -118,7 +132,7 @@ class MessageValidator:
             content = cls._normalize_content(msg.get('content', ''))
             
             content_length = cls._effective_content_length(content)
-            max_length = int(BrowserConstants.MAX_MESSAGE_LENGTH)
+            max_length = _browser_limit("MAX_MESSAGE_LENGTH", 1000000)
             if content_length > max_length:
                 return False, (
                     f"messages[{i}].content 超过长度限制"
