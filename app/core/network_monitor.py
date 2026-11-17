@@ -3172,6 +3172,15 @@ def create_network_monitor(tab, formatter: SSEFormatter,
     
     # 获取解析器 ID
     parser_id = network_config.get("parser")
+    if parser_id == "copilot_ws":
+        # ChatHub is a WebSocket, not an HTTP/SSE response body. Attach a
+        # per-tab CDP session before submit and correlate its invocation.
+        from app.core.copilot_ws_monitor import CopilotWebSocketMonitor
+        return CopilotWebSocketMonitor(
+            tab=tab, formatter=formatter, stream_config=stream_config,
+            stop_checker=stop_checker, event_handler=event_handler,
+            result_handler=result_handler, image_config=image_config,
+        )
     event_only = bool(network_config.get("event_only", False))
     if not parser_id:
         if event_only and event_handler is not None:

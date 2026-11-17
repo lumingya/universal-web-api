@@ -64,6 +64,13 @@
       "config_sha256": "7ffb7b64145a940cf89371cf4c262f0ad6f46801c10abbbb50d88a96af138891",
       "file_sha256": "b6680f6867108bb87fe4f817b3a184b4b637592c1fb18a35df96567478c84781"
     },
+    "copilot.com": {
+      "file": "copilot.com.json",
+      "adapter_version": "2026.11.17",
+      "min_app_version": "3.0.2",
+      "config_sha256": "79d55e6fcced704b56c9447d171aea885afd90deedaafda6ec03f3e57723c12f",
+      "file_sha256": "0fd83d56f388314c991a9d90c6f796c75265a496733001356898138ca7897459"
+    },
     "gemini.google.com": {
       "file": "gemini.google.com.json",
       "adapter_version": "2026.09.26",
