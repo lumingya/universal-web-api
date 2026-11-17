@@ -26,7 +26,7 @@ def complete(text,request='r'):return {'type':2,'invocationId':'0','item':{'requ
 def initial(text='a'):return update(requestId='r',nonce='n',cursor={'j':"$['x'].adaptiveCards[0].body[0].text",'p':-1},messages=[bot(text)])
 class MonitorTests(unittest.TestCase):
  def setUp(self):
-  self.driver_patch=patch.object(M, "Driver", FakeDriver);self.driver_patch.start();self.addCleanup(self.driver_patch.stop)
+  self.driver_patch=patch.object(M, "driver_class", return_value=FakeDriver);self.driver_patch.start();self.addCleanup(self.driver_patch.stop)
  def monitor(self):
   m=M.CopilotWebSocketMonitor(Tab(),Formatter(),{'hard_timeout':10,'network':{'first_response_timeout':1}});m.pre_start();m.mark_send_attempt();return m
  def test_full_lifecycle_and_privacy(self):

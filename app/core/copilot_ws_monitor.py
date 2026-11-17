@@ -12,7 +12,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 
-from DrissionPage._base.driver import Driver
+from app.core.driver.drission_internals import driver_class
 from app.core.config import SSEFormatter, logger
 from app.core.network_monitor import NetworkMonitorError, NetworkMonitorTimeout, NetworkMonitorTerminalError
 from app.core.parsers.copilot_chathub import CopilotChatHubParser
@@ -80,7 +80,7 @@ class CopilotWebSocketMonitor:
         try:
             u=urlsplit(url)
             self.socket_urls[requestId] = (u.hostname=='substrate.office.com' and '/m365Copilot/Chathub/' in u.path)
-        except Exception: pass
+        except (TypeError, ValueError, AttributeError): pass
 
     def _on_sent(self, requestId=None, response=None, **kw):
         self._frame('sent',requestId,response)
@@ -132,17 +132,21 @@ class CopilotWebSocketMonitor:
     def pre_start(self):
         with self.lock:
             if self.driver is not None:return
+            d = None
             try:
-                d=Driver(self.tab.tab_id,self.tab.driver.address)
+                d=driver_class()(self.tab.tab_id,self.tab.driver.address)
                 d.set_callback('Network.webSocketCreated',self._created)
                 d.set_callback('Network.webSocketFrameSent',self._on_sent)
                 d.set_callback('Network.webSocketFrameReceived',self._on_received)
                 d.run('Network.enable')
                 self.driver=d
                 logger.info('[CopilotWS] WebSocket listener ready')
-            except Exception:
-                try:d.stop()
-                except Exception:pass
+            except Exception:  # broad-except: external CDP setup may fail in arbitrary driver code
+                if d is not None:
+                    try:
+                        d.stop()
+                    except Exception:  # broad-except: best-effort cleanup after failed setup
+                        pass
                 self.failed='copilot_listener_start_failed'
 
     def mark_send_attempt(self):
@@ -211,7 +215,8 @@ class CopilotWebSocketMonitor:
             self.armed=False;d=self.driver;self.driver=None
         if d is not None:
             try:d.stop()
-            except Exception:pass
+            except Exception:  # broad-except: external CDP teardown is best effort
+                pass
         while True:
             try:self.events.get_nowait()
             except queue.Empty:break
