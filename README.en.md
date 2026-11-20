@@ -18,7 +18,7 @@
 
 <br>
 
-> Current release: **3.0.1** (see [`VERSION`](./VERSION); release notes in [`CHANGELOG-3.0.1.md`](./CHANGELOG-3.0.1.md))
+> Current release: **3.0.2** (see [`VERSION`](./VERSION); release notes in [`CHANGELOG-3.0.2.md`](./CHANGELOG-3.0.2.md))
 
 **Universal Web API** is a **local API bridge & debugging tool** designed for developers. It converts AI web services (e.g., ChatGPT, DeepSeek, Claude, Gemini) logged in your local browser into local standard OpenAI/Anthropic-compatible APIs.
 

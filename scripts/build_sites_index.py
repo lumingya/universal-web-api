@@ -37,7 +37,13 @@ def _sha256(data: bytes) -> str:
 
 
 def site_files(sites_dir: Path = SITES_DIR):
-    return sorted(p for p in sites_dir.glob("*.json") if p.name != INDEX_PATH.name and not p.name.startswith("."))
+    return sorted(
+        p
+        for p in sites_dir.glob("*.json")
+        if p.name != INDEX_PATH.name
+        and not p.name.startswith(".")
+        and not p.name.endswith(".local.json")
+    )
 
 
 def build_index(sites_dir: Path = SITES_DIR) -> dict:

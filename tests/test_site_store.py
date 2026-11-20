@@ -188,6 +188,19 @@ def test_index_builder_script_is_tracked_by_git():
     assert result.returncode == 1, "scripts/build_sites_index.py 被 .gitignore 忽略了，请加入 scripts 白名单"
 
 
+def test_index_builder_ignores_local_site_overrides(tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("build_sites_index", ROOT / "scripts" / "build_sites_index.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    for name in ("arena.ai.json", "arena.ai.local.json", "index.json"):
+        (tmp_path / name).write_text("{}", encoding="utf-8")
+
+    assert [path.name for path in module.site_files(tmp_path)] == ["arena.ai.json"]
+
+
 def test_shipped_sites_dir_is_the_only_source_and_index_is_current():
     assert not (ROOT / "config" / "sites.json").exists(), "拆分后仓库里不应再有旧的单文件 sites.json"
     sites = shipped_sites()
@@ -205,7 +218,7 @@ def test_shipped_sites_dir_is_the_only_source_and_index_is_current():
 
 def test_every_shipped_file_declares_versions():
     for path in sorted((ROOT / "config" / "sites").glob("*.json")):
-        if path.name == "index.json":
+        if path.name == "index.json" or path.name.endswith(".local.json"):
             continue
         payload = _envelope(path)
         assert payload["adapter_version"], path.name

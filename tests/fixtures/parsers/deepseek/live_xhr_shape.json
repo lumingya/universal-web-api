@@ -1,0 +1,11 @@
+{
+  "parser": "deepseek",
+  "synthetic": true,
+  "source": "已验证会话的脱敏外层结构观察；帧和内容均为合成数据，BATCH 子项未纳入样本",
+  "description": "脱敏后的实时 XHR SSE 外层结构：pathless 增量、完整片段快照、空 BATCH 状态帧和 close",
+  "raw": "event: ready\ndata: {}\n\nevent: update_session\ndata: {}\n\ndata: {\"v\":{\"response\":{\"fragments\":[{\"type\":\"THINK\",\"content\":\"redacted\"}],\"status\":\"WIP\"}}}\n\ndata: {\"p\":\"response/fragments/-1/content\",\"o\":\"APPEND\",\"v\":\" internal\"}\n\ndata: {\"v\":\" reasoning\"}\n\ndata: {\"p\":\"response/fragments/-1/elapsed_secs\",\"o\":\"SET\",\"v\":1}\n\ndata: {\"p\":\"response/fragments\",\"v\":[{\"type\":\"THINK\",\"content\":\"redacted internal reasoning\"},{\"type\":\"RESPONSE\",\"content\":\"4\"}]}\n\ndata: {\"p\":\"response\",\"o\":\"BATCH\",\"v\":[]}\n\ndata: {\"p\":\"response/status\",\"o\":\"SET\",\"v\":\"FINISHED\"}\n\nevent: update_session\ndata: {}\n\nevent: close\ndata: {}\n\n",
+  "expected": {
+    "content": "4",
+    "done": true
+  }
+}

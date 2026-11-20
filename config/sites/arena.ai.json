@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
   "site": "arena.ai",
-  "adapter_version": "2026.10.10",
+  "adapter_version": "2026.11.20",
   "min_app_version": "3.0.1",
   "config": {
     "presets": {
       "万能直连-通用文本": {
         "selectors": {
-          "input_box": "textarea[name=\"message\"]",
-          "model_select_btn": "button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate.text-start), button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate.text-left), button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate)",
+          "input_box": "form div[contenteditable=\"true\"], textarea[name=\"message\"]",
+          "model_select_btn": "form button[aria-haspopup=\"dialog\"]:has(span.truncate), button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate.text-start), button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate.text-left), button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate)",
           "send_btn": "button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"]), button[type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"]), button[aria-label=\"Send message\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "stop_btn": "button[aria-label=\"Stop generation\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/chat\"], a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": null,
           "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
@@ -232,7 +232,7 @@
       },
       "万能直连-通用生图": {
         "selectors": {
-          "input_box": "textarea[name=\"message\"]",
+          "input_box": "form div[contenteditable=\"true\"], textarea[name=\"message\"]",
           "send_btn": "button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"]), button[type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"]), button[aria-label=\"Send message\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
           "new_chat_btn": null,
@@ -461,12 +461,12 @@
       },
       "主预设-直连模式": {
         "selectors": {
-          "input_box": "textarea[name=\"message\"]",
-          "model_select_btn": "button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate.text-start), button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate.text-left), button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate)",
+          "input_box": "form div[contenteditable=\"true\"], textarea[name=\"message\"]",
+          "model_select_btn": "form button[aria-haspopup=\"dialog\"]:has(span.truncate), button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate.text-start), button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate.text-left), button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate)",
           "send_btn": "button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"]), button[type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"]), button[aria-label=\"Send message\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "stop_btn": "button[aria-label=\"Stop generation\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/chat\"], a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": null,
           "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
@@ -715,10 +715,10 @@
       },
       "direct-预注入-图片模式": {
         "selectors": {
-          "input_box": "textarea[name=\"message\"]",
+          "input_box": "form div[contenteditable=\"true\"], textarea[name=\"message\"]",
           "send_btn": "button[aria-label=\"Stop generation\"], button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/chat\"], a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": null,
           "retry button": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
@@ -967,10 +967,10 @@
       },
       "主预设-双栏模式": {
         "selectors": {
-          "input_box": "textarea[name=\"message\"]",
+          "input_box": "form div[contenteditable=\"true\"], textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/chat\"], a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": null,
           "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
@@ -1172,10 +1172,10 @@
       },
       "主预设-图片模式": {
         "selectors": {
-          "input_box": "textarea[name=\"message\"]",
+          "input_box": "form div[contenteditable=\"true\"], textarea[name=\"message\"]",
           "send_btn": "button[aria-label=\"Stop generation\"], button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/chat\"], a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": null,
           "retry button": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
@@ -1420,11 +1420,11 @@
       },
       "Battle-左侧": {
         "selectors": {
-          "input_box": "textarea[name=\"message\"]",
+          "input_box": "form div[contenteditable=\"true\"], textarea[name=\"message\"]",
           "send_btn": "button[aria-label=\"Stop generation\"], button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "stop_btn": "button[aria-label=\"Stop generation\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/chat\"], a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": "button[aria-label=\"Stop generation\"]",
           "retry_send_btn": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
@@ -1655,11 +1655,11 @@
       },
       "Battle-右侧": {
         "selectors": {
-          "input_box": "textarea[name=\"message\"]",
+          "input_box": "form div[contenteditable=\"true\"], textarea[name=\"message\"]",
           "send_btn": "button[aria-label=\"Stop generation\"], button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "stop_btn": "button[aria-label=\"Stop generation\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/chat\"], a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": "button[aria-label=\"Stop generation\"]",
           "retry_send_btn": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
@@ -1890,11 +1890,11 @@
       },
       "Battle-赢家优先（非流式）": {
         "selectors": {
-          "input_box": "textarea[name=\"message\"]",
+          "input_box": "form div[contenteditable=\"true\"], textarea[name=\"message\"]",
           "send_btn": "button[aria-label=\"Stop generation\"], button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "stop_btn": "button[aria-label=\"Stop generation\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/chat\"], a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": "button[aria-label=\"Stop generation\"]",
           "retry_send_btn": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
@@ -2169,10 +2169,10 @@
       },
       "主预设-图片模式-右侧": {
         "selectors": {
-          "input_box": "textarea[name=\"message\"]",
+          "input_box": "form div[contenteditable=\"true\"], textarea[name=\"message\"]",
           "send_btn": "button[aria-label=\"Stop generation\"], button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/chat\"], a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": null,
           "retry button": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
@@ -2445,10 +2445,10 @@
       },
       "direct-图片模式-文生图": {
         "selectors": {
-          "input_box": "textarea[name=\"message\"]",
+          "input_box": "form div[contenteditable=\"true\"], textarea[name=\"message\"]",
           "send_btn": "button[aria-label=\"Stop generation\"], button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/chat\"], a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": null,
           "retry button": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",

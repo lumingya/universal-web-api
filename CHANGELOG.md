@@ -3,6 +3,18 @@
 本文件格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 以下内容均为相对 **v2.10.0** 的最终变化。
 
+## [3.0.2] - 2026-11-20
+
+### Fixed
+
+- 修复 Arena.ai 新版 ProseMirror 输入框、模型选择器和 `/chat` 新建会话入口选择器失效；保留旧版选择器作为回退。
+- 修复 DeepSeek XHR SSE 中无操作字段的 `response/fragments` 累计快照被忽略的问题，正确合并 RESPONSE 增量并继续过滤 THINK 内容。
+- 修复站点索引生成器将 `*.local.json` 本地覆盖配置误纳入发布索引的问题。
+
+### Tests
+
+- 增加基于真实 DeepSeek 流形状的脱敏回归样本和片段类型切换测试。
+
 ## [3.0.1] - 2026-10-10
 
 ### ⚠️ 升级须知（可能影响现有部署）

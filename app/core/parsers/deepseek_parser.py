@@ -137,6 +137,11 @@ class DeepSeekParser(ResponseParser):
         if operation == "BATCH" and isinstance(value, list):
             return self._extract_batch_content(value)
 
+        if path in {"response/fragments", "fragments"} and isinstance(value, list):
+            if operation == "APPEND":
+                return self._register_fragments(value), False
+            return self._merge_fragment_snapshot(value), False
+
         if isinstance(value, dict):
             response = value.get("response")
             if isinstance(response, dict):
@@ -188,6 +193,12 @@ class DeepSeekParser(ResponseParser):
                     content_parts.append(fragment_content)
                 continue
 
+            if path in {"response/fragments", "fragments"} and isinstance(value, list):
+                snapshot_content = self._merge_fragment_snapshot(value)
+                if snapshot_content:
+                    content_parts.append(snapshot_content)
+                continue
+
             if self._is_fragment_content_patch(path, value):
                 fragment_index = self._resolve_fragment_index(path)
                 fragment_type = self._resolve_fragment_type(path)
@@ -231,6 +242,43 @@ class DeepSeekParser(ResponseParser):
                 if text and self._should_emit_fragment_text(fragment_type):
                     self._mark_visible_response_text(fragment_type, text)
                     content_parts.append(text)
+
+        return "".join(content_parts)
+
+    def _merge_fragment_snapshot(self, fragments: List[Dict[str, Any]]) -> str:
+        """Merge DeepSeek's no-op ``response/fragments`` cumulative snapshot.
+
+        The web client periodically sends the complete fragment list without an
+        operation field. Existing fragment indexes are cumulative values, while
+        newly appended fragments extend the list. Only newly visible RESPONSE
+        text is emitted; THINK updates remain internal state.
+        """
+        content_parts: List[str] = []
+
+        for index, fragment in enumerate(fragments):
+            if not isinstance(fragment, dict):
+                continue
+
+            fragment_type = str(fragment.get("type", "") or "").upper()
+            text = fragment.get("content", "")
+            if not isinstance(text, str):
+                text = ""
+
+            if index < len(self._fragment_types):
+                existing_type = self._fragment_types[index]
+                if fragment_type and not existing_type:
+                    self._fragment_types[index] = fragment_type
+                effective_type = self._fragment_types[index] or fragment_type
+                delta_text = self._apply_fragment_content_update(index, text)
+                self._current_fragment_index = index
+                self._current_fragment_type = effective_type
+            else:
+                delta_text = self._register_fragments([fragment])
+                effective_type = fragment_type
+
+            if delta_text and self._should_emit_fragment_text(effective_type):
+                self._mark_visible_response_text(effective_type, delta_text)
+                content_parts.append(delta_text)
 
         return "".join(content_parts)
 

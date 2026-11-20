@@ -31,6 +31,7 @@ from app.utils.model_routing import inspect_model_route
 
 MODEL_UUID = "019c6d29-a30c-7e20-9bd0-6650af926623"
 MODEL_TRIGGER_SELECTOR = (
+    'form button[aria-haspopup="dialog"]:has(span.truncate), '
     'button[aria-haspopup="dialog"]:has(span.flex-1.truncate.text-start), '
     'button[aria-haspopup="dialog"]:has(span.flex-1.truncate.text-left), '
     'button[aria-haspopup="dialog"]:has(span.flex-1.truncate)'
@@ -1018,6 +1019,10 @@ def test_arena_universal_direct_text_preset_workflow():
     assert selectors.get("new_chat_btn") is not None
     assert selectors.get("input_box") is not None
     assert selectors.get("send_btn") is not None
+    assert 'form div[contenteditable="true"]' in selectors["input_box"]
+    assert 'textarea[name="message"]' in selectors["input_box"]
+    assert 'a[data-sidebar="menu-button"][href="/chat"]' in selectors["new_chat_btn"]
+    assert 'button[aria-haspopup="dialog"]:has(span.truncate)' in selectors["model_select_btn"]
 
     workflow = [s for s in preset["workflow"] if s.get("action") != "READONLY_HINT"]
     assert len(workflow) == 6
@@ -1027,6 +1032,33 @@ def test_arena_universal_direct_text_preset_workflow():
     assert workflow[3]["action"] == "FILL_INPUT" and workflow[3]["target"] == "input_box"
     assert workflow[4]["action"] == "CLICK" and workflow[4]["target"] == "send_btn"
     assert workflow[5]["action"] == "STREAM_WAIT" and workflow[5]["target"] == "result_container"
+
+
+def test_arena_dom_selectors_cover_current_chat_composer():
+    from tests._sites import shipped_sites
+
+    presets = shipped_sites()["arena.ai"]["presets"]
+    updated_inputs = 0
+    updated_new_chats = 0
+
+    for preset in presets.values():
+        selectors = preset.get("selectors") or {}
+        input_box = selectors.get("input_box")
+        if isinstance(input_box, str) and input_box.strip():
+            assert 'form div[contenteditable="true"]' in input_box
+            updated_inputs += 1
+
+        new_chat = selectors.get("new_chat_btn")
+        if isinstance(new_chat, str) and new_chat.strip():
+            assert 'href="/chat"' in new_chat
+            updated_new_chats += 1
+
+        model_picker = selectors.get("model_select_btn")
+        if isinstance(model_picker, str) and model_picker.strip():
+            assert 'form button[aria-haspopup="dialog"]:has(span.truncate)' in model_picker
+
+    assert updated_inputs >= 11
+    assert updated_new_chats > 0
 
 
 def test_filter_models_respects_explicit_modality_over_keyword():
