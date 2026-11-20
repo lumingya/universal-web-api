@@ -26,8 +26,8 @@
       "file": "arena.ai.json",
       "adapter_version": "2026.11.20",
       "min_app_version": "3.0.1",
-      "config_sha256": "bf2f9cb5f5ea490cd0c7b80b815c93ea128d99cc48518c3218b21cb0d61d37fc",
-      "file_sha256": "d84ccabdd0091b14076d0bae7b14c43ac1e58f60ce9d7baaf362820df8c2eef5"
+      "config_sha256": "489447dd4ec566090008add76b409243e19445a38e19e7fa8af414fc2acd1586",
+      "file_sha256": "561dc74f947714080c41f1bcf16353c28414778029222e564a082d4dcabd6619"
     },
     "chat.deepseek.com": {
       "file": "chat.deepseek.com.json",
@@ -38,10 +38,10 @@
     },
     "chat.qwen.ai": {
       "file": "chat.qwen.ai.json",
-      "adapter_version": "2026.09.26",
+      "adapter_version": "2026.11.09",
       "min_app_version": "3.0.0",
-      "config_sha256": "99251efe060a358cad204a959cf5d2dad223847157ae25d54110f79bdf9241a4",
-      "file_sha256": "57972cc9b62a47deb2f053b48291e5e4378339e97db8fd861cfcf8fd90121149"
+      "config_sha256": "629fd22eb2dc2156bd1576a7de8e8679e2936f77cab39a3140366d5dfadacf3d",
+      "file_sha256": "f5023f319ac2a25028b0a3bfd9eef27d48d5799a78e045b335b1d61a1529817b"
     },
     "chatglm.cn": {
       "file": "chatglm.cn.json",

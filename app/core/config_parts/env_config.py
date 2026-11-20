@@ -323,7 +323,7 @@ class AppConfig:
     # ===== 配置文件路径 =====
     @staticmethod
     def get_sites_config_file() -> str:
-        return os.getenv("SITES_CONFIG_FILE", "config/sites.json")
+        return os.getenv("SITES_CONFIG_FILE", str(PROJECT_ROOT / "config" / "sites.json"))
 
     # ===== 便捷属性（支持类/实例两种访问方式）=====
     @classproperty

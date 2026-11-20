@@ -300,11 +300,20 @@ def _export_sites_config() -> Dict[str, Any]:
     return load_sites_dict(config_engine.sites_dir)
 
 
+def _browser_config_path() -> Path:
+    """browser_config.json 的绝对路径（sidecar 的 CWD 不是 uwa 根）。"""
+    from app.core.config import BrowserConstants
+    try:
+        return Path(BrowserConstants._resolve_config_file())
+    except Exception:
+        return Path("config/browser_config.json")
+
+
 def _build_settings_backup_bundle() -> Dict[str, Any]:
     sites_local_file = Path(config_engine.local_sites_file)
     commands_file = Path(ConfigConstants.COMMANDS_FILE)
     commands_local_file = Path(ConfigConstants.COMMANDS_LOCAL_FILE)
-    browser_config_file = Path("config/browser_config.json")
+    browser_config_file = _browser_config_path()
     extractors_file = Path(extractor_manager.CONFIG_FILE)
 
     # S13：备份文件会被下载、转存、分享，默认绝不包含 .env 中的令牌/密钥/含凭据的代理地址。
@@ -1132,7 +1141,7 @@ async def import_settings_backup(
                 imported_sections.append("commands_local")
 
             if "browser_constants" in files:
-                write_import_json(Path("config/browser_config.json"), files["browser_constants"])
+                write_import_json(_browser_config_path(), files["browser_constants"])
                 imported_sections.append("browser_constants")
 
             if "extractors" in files:
@@ -1140,7 +1149,8 @@ async def import_settings_backup(
                 imported_sections.append("extractors")
 
             if "update_preserve" in files:
-                remember_file(Path("config") / "update_settings.json")
+                from app.core.config_parts.paths import config_path as _uwa_config_path
+                remember_file(_uwa_config_path("update_settings.json"))
                 save_update_preserve_settings(files["update_preserve"])
                 imported_sections.append("update_preserve")
 
@@ -1184,7 +1194,7 @@ async def import_settings_backup(
 async def get_browser_constants(authenticated: bool = Depends(verify_auth)):
     """读取浏览器常量配置"""
     try:
-        config_path = Path("config/browser_config.json")
+        config_path = _browser_config_path()
         config = _read_json_file(config_path, DEFAULT_BROWSER_CONSTANTS)
         return {"config": config}
 
@@ -1204,7 +1214,7 @@ async def save_browser_constants(
         config = data.get("config", {})
         if not isinstance(config, dict):
             raise HTTPException(status_code=400, detail="浏览器常量配置必须是 JSON 对象")
-        _write_json_file(Path("config/browser_config.json"), config)
+        _write_json_file(_browser_config_path(), config)
 
         try:
             from app.core.config import BrowserConstants

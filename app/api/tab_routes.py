@@ -317,8 +317,10 @@ _route_round_robin_lock = threading.Lock()
 _browser_config_lock = threading.RLock()
 _model_name_overrides_lock = threading.RLock()
 _preset_overrides_lock = threading.RLock()
-MODEL_NAME_OVERRIDES_PATH = Path("config/model_name_overrides.local.json")
-PRESET_OVERRIDES_PATH = Path("config/preset_overrides.local.json")
+from app.core.config_parts.paths import config_path as _uwa_config_path
+
+MODEL_NAME_OVERRIDES_PATH = _uwa_config_path("model_name_overrides.local.json")
+PRESET_OVERRIDES_PATH = _uwa_config_path("preset_overrides.local.json")
 
 
 async def _cleanup_route_worker_thread(
@@ -376,8 +378,17 @@ def _put_route_worker_queue_item(
     )
 
 
+def _browser_config_path() -> Path:
+    """browser_config.json 的绝对路径（sidecar 的 CWD 不是 uwa 根）。"""
+    from app.core.config import BrowserConstants
+    try:
+        return Path(BrowserConstants._resolve_config_file())
+    except Exception:
+        return Path("config/browser_config.json")
+
+
 def _read_browser_config() -> Dict[str, Any]:
-    config_path = Path("config/browser_config.json")
+    config_path = _browser_config_path()
     if not config_path.exists():
         return {}
     with open(config_path, "r", encoding="utf-8-sig") as f:
@@ -385,7 +396,7 @@ def _read_browser_config() -> Dict[str, Any]:
 
 
 def _write_browser_config_unlocked(payload: Dict[str, Any]) -> None:
-    atomic_write_json(Path("config/browser_config.json"), payload)
+    atomic_write_json(_browser_config_path(), payload)
 
 
 def _write_browser_config(payload: Dict[str, Any]) -> None:

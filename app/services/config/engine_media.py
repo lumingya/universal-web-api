@@ -433,8 +433,21 @@ class ConfigMediaMixin:
             result["attachment_monitor"] = get_default_attachment_monitor_config()
             return result
 
+        # attachments 既支持 file_paste.attachments，也接受 preset 顶层写法。
+        # chat.qwen.ai / arena.ai 曾把该段写在 preset 顶层，被静默忽略后回落默认
+        # 通道顺序（其中没有 image_clipboard），表现为图片永远粘不进去。
+        _file_paste_cfg = data.get("file_paste")
+        _file_paste_cfg = dict(_file_paste_cfg) if isinstance(_file_paste_cfg, dict) else {}
+        _preset_attachments = data.get("attachments")
+        if isinstance(_preset_attachments, dict) and not isinstance(_file_paste_cfg.get("attachments"), dict):
+            _file_paste_cfg["attachments"] = _preset_attachments
+            logger.warning(
+                "[CFG] %s%s 的 attachments 写在 preset 顶层，已按 file_paste.attachments 处理" % (
+                    domain, "/" + str(preset_name) if preset_name else "",
+                )
+            )
         return self._validate_file_paste_config(
-            data.get("file_paste", {}),
+            _file_paste_cfg,
             legacy_stream_config=data.get("stream_config"),
             include_attachment_defaults=True,
         )

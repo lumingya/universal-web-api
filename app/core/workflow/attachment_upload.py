@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from app.core.config import WorkflowError
+from app.core.config import WorkflowError, logger
 from app.core.tab_pool import get_clipboard_lock
 from app.utils.attachments import attachment_config, type_allowed, MIB
 from app.utils.platform import get_primary_modifier_key
@@ -52,6 +52,21 @@ class AttachmentUploadCoordinator:
             raise WorkflowError("attachment_cancelled")
         if self.tainted:
             raise WorkflowError("attachment_upload_unconfirmed")
+
+    def _ensure_focus(self, attempts=4, interval=0.15):
+        # 焦点校验偶发瞬时误判；同通道重试，避免把一次误判当成
+        # “换一条注定失败的通道”（文件列表粘贴在部分站点上是死通道）。
+        if not self.focus:
+            return False
+        for index in range(max(1, int(attempts))):
+            try:
+                if self.focus():
+                    return True
+            except Exception:
+                return False
+            if index + 1 < int(attempts):
+                time.sleep(interval)
+        return False
 
     def _element(self, selector):
         if not selector:
@@ -142,7 +157,7 @@ return true;
         try:
             with get_clipboard_lock():
                 self._check()
-                if not self.focus or not self.focus():
+                if not self._ensure_focus():
                     return DispatchResult(DispatchState.NOT_DISPATCHED, name, "focus_not_confirmed")
                 copier = copy_image_to_native_clipboard if image else copy_file_to_native_clipboard
                 copier(str(path))
@@ -208,6 +223,7 @@ return true;
         names = [path.name]  # no stem-only match against unrelated composer text
         for name in self.config["transport_order"]:
             self._check()
+            _transport_started = time.monotonic()
             if time.monotonic() >= deadline:
                 break
             baseline = self.monitor.begin_tracking(expected_names=names)
@@ -222,6 +238,13 @@ return true;
             except Exception:
                 result = DispatchResult(DispatchState.UNKNOWN, name, "transport_failed")
             self.last_result = result
+            # SecureLogger 只接受一个已格式化的字符串，不能传惰性参数。
+            logger.info(
+                "[ATTACHMENT] transport=%s state=%s reason=%s elapsed=%.2fs" % (
+                    name, result.state.value, result.reason or "-",
+                    time.monotonic() - _transport_started,
+                )
+            )
             if result.state == DispatchState.NOT_DISPATCHED:
                 continue
             # Once a side effect is possible, no blind retry or transport fallback.

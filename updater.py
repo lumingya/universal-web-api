@@ -51,6 +51,8 @@ MAX_UPDATE_COMPRESSION_RATIO = 200
 # 更新时保留的文件/目录
 DEFAULT_PRESERVE = get_default_update_preserve_patterns()
 
+# 注意：以下三个常量是「更新包内的相对路径」比对模式，必须保持相对写法，
+# 不能改造成绝对路径，否则更新时的保留/合并逻辑会全部失配。
 SITES_CONFIG_PATH = Path("config") / "sites.json"
 # R1-2：站点配置目录（每站点一个文件）与内置适配器清单
 SITES_DIR_PATH = Path("config") / "sites"

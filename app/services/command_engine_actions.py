@@ -1956,7 +1956,7 @@ return (() => {
                 from app.core.config import PROJECT_ROOT
                 base_dir = os.path.join(str(PROJECT_ROOT), "data", "command_outputs")
             except Exception:
-                base_dir = os.path.join(os.getcwd(), "data", "command_outputs")
+                base_dir = os.path.join(_PROJECT_ROOT, "data", "command_outputs")
         return os.path.abspath(os.path.expanduser(base_dir))
 
     @staticmethod

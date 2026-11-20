@@ -171,7 +171,7 @@ def _load_tab_pool_config() -> Dict:
     
     # 从 browser_config.json 加载
     try:
-        config_path = "config/browser_config.json"
+        config_path = str(BrowserConstants._resolve_config_file())
         if os.path.exists(config_path):
             with open(config_path, 'r', encoding='utf-8') as f:
                 file_config = json.load(f)

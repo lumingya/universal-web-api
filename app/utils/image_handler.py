@@ -33,7 +33,9 @@ logger = get_logger("IMG_HDL")
 
 # ================= 配置常量 =================
 
-IMAGE_DIR = Path("temp") / "image_inputs"
+from app.core.config_parts.paths import TEMP_DIR
+
+IMAGE_DIR = TEMP_DIR / "image_inputs"
 MAX_IMAGE_SIZE_MB = 20  # 单张图片最大 20MB
 MAX_IMAGES_PER_REQUEST = 8
 MAX_IMAGES_TOTAL_MB = 50

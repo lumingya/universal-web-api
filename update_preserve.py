@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
-UPDATE_SETTINGS_FILE = Path("config") / "update_settings.json"
+_PROJECT_ROOT = Path(__file__).resolve().parent
+UPDATE_SETTINGS_FILE = _PROJECT_ROOT / "config" / "update_settings.json"
 
 
 def _replace_file_with_retry(source: str | Path, dest: str | Path) -> None:
@@ -152,7 +153,8 @@ UPDATE_PRESERVE_OPTIONS: List[Dict[str, Any]] = [
 ]
 
 INTERNAL_ALWAYS_PRESERVE: List[str] = [
-    str(UPDATE_SETTINGS_FILE).replace("\\", "/"),
+    # 相对模式：更新走查的是「更新包内的相对路径」，这里不能换成绝对路径
+    "config/update_settings.json",
     "config/app_stats.json",
     "config/runtime.sqlite3",
     "config/runtime.sqlite3-wal",
