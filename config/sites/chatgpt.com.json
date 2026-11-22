@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "site": "chatgpt.com",
-  "adapter_version": "2026.09.26",
+  "adapter_version": "2026.11.22",
   "min_app_version": "3.0.0",
   "config": {
     "presets": {
@@ -171,11 +171,11 @@
           "file_input": "input[type=\"file\"]",
           "upload_btn": "button[aria-label*=\"添加文件\"], button[aria-label*=\"Attach\"], button[aria-label*=\"Upload\"]",
           "drop_zone": "form, div.ProseMirror",
-          "generating_indicator": null,
+          "generating_indicator": "button[data-testid=\"stop-button\"], button[aria-label=\"Stop streaming\"], button[aria-label=\"Stop generating\"], button[aria-label=\"停止流式传输\"], button[aria-label=\"停止生成\"], button[aria-label=\"停止\"]",
           "input_box": "#prompt-textarea, div.ProseMirror[contenteditable=\"true\"], div[role=\"textbox\"][contenteditable=\"true\"]",
-          "message_wrapper": "section[data-testid^=\"conversation-turn-\"]",
+          "message_wrapper": "[data-content-search-unit-key], [data-testid^=\"conversation-turn-\"]",
           "new_chat_btn": "[data-testid=\"create-new-chat-button\"], a[href=\"/\"]",
-          "result_container": "section[data-testid^=\"conversation-turn-\"] .markdown, section[data-testid^=\"conversation-turn-\"] div[id^=\"image-\"]",
+          "result_container": "[data-markdown-text-style=\"assistant-message\"], [data-message-author-role=\"assistant\"] .markdown, [data-testid^=\"conversation-turn-\"] .markdown, [data-testid^=\"conversation-turn-\"] div[id^=\"image-\"]",
           "send_btn": "button[data-testid=\"send-button\"], button[type=\"submit\"], button[aria-label*=\"发送\"], button[aria-label*=\"Send\"]",
           "temp_chat_btn": "button[aria-label=\"开启临时聊天\"]"
         },
