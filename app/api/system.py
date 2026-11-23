@@ -1275,6 +1275,7 @@ async def get_update_preserve_settings(authenticated: bool = Depends(verify_auth
         return {
             "options": data.get("options", []),
             "selected_patterns": data.get("selected_patterns", []),
+            "source": data["source"],
         }
     except Exception as e:
         logger.error(f"读取更新白名单失败: {e}")
@@ -1289,7 +1290,7 @@ async def save_update_preserve(
     """保存更新白名单配置。"""
     try:
         data = await _read_json_object_or_400(request)
-        selected_patterns = data.get("selected_patterns", [])
+        selected_patterns = data.get("selected_patterns")
         if not isinstance(selected_patterns, list):
             raise HTTPException(status_code=400, detail="更新白名单必须是数组")
         result = save_update_preserve_settings(selected_patterns)
@@ -1298,6 +1299,7 @@ async def save_update_preserve(
             "status": "success",
             "message": "更新白名单已保存，下次更新时生效",
             "selected_patterns": result.get("selected_patterns", []),
+            "source": result["source"],
         }
     except HTTPException:
         raise

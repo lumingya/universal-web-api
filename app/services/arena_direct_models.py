@@ -45,8 +45,12 @@ return (() => {
         let d = 0;
         while (cur && d < 25) {
             if (cur.memoizedProps) {
+                if (Array.isArray(cur.memoizedProps.initialModels) && cur.memoizedProps.initialModels.length > 0) {
+                    fiberModels = cur.memoizedProps.initialModels;
+                    break;
+                }
                 for (const [k, v] of Object.entries(cur.memoizedProps)) {
-                    if (Array.isArray(v) && v.length >= 30 && v.length <= 300 && v[0] && (v[0].id && (v[0].displayName || v[0].name || v[0].publicName))) {
+                    if (Array.isArray(v) && v.length >= 20 && v.length <= 500 && v[0] && (v[0].id && (v[0].displayName || v[0].name || v[0].publicName))) {
                         fiberModels = v;
                         break;
                     }
@@ -397,11 +401,34 @@ def _is_arena_direct_url(
     except Exception:
         return False
 
-    if path in {"/direct", "/text/direct", "/image/direct", "/code/direct"} or path.startswith((
+    if path in {
+        "",
+        "/",
+        "/direct",
+        "/text/direct",
+        "/image/direct",
+        "/code/direct",
+        "/text",
+        "/chat",
+        "/code",
+        "/image",
+        "/side-by-side",
+        "/battle",
+        "/auto",
+        "/arena",
+    } or path.startswith((
         "/direct/",
         "/text/direct/",
         "/image/direct/",
         "/code/direct/",
+        "/text/",
+        "/chat/",
+        "/code/",
+        "/image/",
+        "/side-by-side/",
+        "/battle/",
+        "/auto/",
+        "/arena/",
     )) or path.endswith("/direct"):
         return True
 
@@ -687,12 +714,21 @@ def list_arena_direct_models(
                     models = read_arena_direct_models_from_tab(target_tab_obj)
                     if models:
                         _replace_session_cache(key, models)
+                        _replace_cache(models)
                         return _filter_models(models, catalog_config)
                 except Exception as exc:
                     logger.debug(f"从目标标签页读取 Arena 直连模型失败: {exc}")
 
         if cached:
             return _filter_models(cached, catalog_config)
+
+        # 尝试回退全局缓存
+        _g_ts, g_cached = _cache_snapshot()
+        if g_cached:
+            filtered_g = _filter_models(g_cached, catalog_config)
+            if filtered_g:
+                return filtered_g
+
         return []
 
     sessions = _arena_sessions(browser)

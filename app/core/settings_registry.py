@@ -76,6 +76,7 @@ CATEGORIES: Tuple[Tuple[str, str], ...] = (
 # 代码会读取、但不属于本应用配置项的环境变量（终端检测、系统路径、进程内部标志）
 EXTERNAL_ENV: Dict[str, str] = {
     'ANSICON': '终端颜色检测（Windows ANSICON）',
+    'GITHUB_TOKEN': 'GitHub 访问令牌（用于高频自动更新与 API 请求鉴权）',
     'LOCALAPPDATA': 'Windows 用户数据目录（查找浏览器可执行文件）',
     'NO_COLOR': '终端颜色检测（no-color.org 约定）',
     'PYTHONIOENCODING': '子进程输出编码（启动器设置）',
@@ -89,7 +90,7 @@ SETTINGS: Tuple[Setting, ...] = (
     Setting('CURRENT_VERSION', 'str', '', 'version', '旧版版本号记录：仅在缺少 VERSION 文件时由更新器读取（实际版本以 VERSION 文件为准）', example='1.01', active=True),
     Setting('AUTO_UPDATE_ENABLED', 'bool', True, 'update', '启用自动更新：开启后 start.bat 会在启动前检查并自动应用更新；关闭后仍会在服务启动后检查新版本，只提示手动更新', example='true', active=True),
     Setting('GITHUB_REPO', 'str', 'lumingya/universal-web-api', 'update', 'GitHub 仓库：自动更新和启动版本检查使用的仓库，格式为 owner/repo', active=True),
-    Setting('UPDATE_PRESERVE', 'str', '', 'update', '更新时保留的文件/目录（逗号分隔）', example='chrome_profile,venv,.env.local,logs', active=True),
+    Setting('UPDATE_PRESERVE', 'str', '', 'update', '旧版更新保留名单（逗号分隔）。仅在控制面板尚无已保存的“自动更新时保留”配置时使用'),
     Setting('APP_DEBUG', 'bool', False, 'service', '调试模式：开启 API 文档和详细错误', example='false', active=True),
     Setting('APP_HOST', 'str', '127.0.0.1', 'service', '监听地址：127.0.0.1 仅本机（推荐）；0.0.0.0 允许外部访问，此时必须同时启用控制面板认证和服务 API 认证，否则服务拒绝启动', active=True),
     Setting('APP_PORT', 'int', 8199, 'service', '监听端口', minimum=1, maximum=65535, active=True),

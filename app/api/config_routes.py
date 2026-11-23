@@ -1627,6 +1627,7 @@ async def get_site_model_catalog(
     }
 
 
+@router.post("/api/sites/{domain}/model-catalog")
 @router.put("/api/sites/{domain}/model-catalog")
 async def set_site_model_catalog(
     domain: str,

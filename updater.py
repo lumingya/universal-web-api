@@ -28,7 +28,6 @@ from urllib.parse import urlparse
 import posixpath
 from update_preserve import (
     build_effective_preserve_patterns,
-    get_default_update_preserve_patterns,
     load_update_preserve_settings,
 )
 
@@ -47,9 +46,6 @@ MAX_UPDATE_ARCHIVE_BYTES = 512 * 1024 * 1024
 MAX_UPDATE_MEMBER_COUNT = 20_000
 MAX_UPDATE_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_UPDATE_COMPRESSION_RATIO = 200
-
-# 更新时保留的文件/目录
-DEFAULT_PRESERVE = get_default_update_preserve_patterns()
 
 # 注意：以下三个常量是「更新包内的相对路径」比对模式，必须保持相对写法，
 # 不能改造成绝对路径，否则更新时的保留/合并逻辑会全部失配。
@@ -1018,13 +1014,9 @@ def check_and_update(repo: str = None, force: bool = False, preserve: list = Non
         repo = os.getenv('GITHUB_REPO', DEFAULT_REPO)
     
     if preserve is None:
-        preserve_str = os.getenv('UPDATE_PRESERVE', '')
-        if preserve_str:
-            preserve = build_effective_preserve_patterns([p.strip() for p in preserve_str.split(',')])
-        else:
-            preserve = build_effective_preserve_patterns(
-                load_update_preserve_settings().get("selected_patterns", DEFAULT_PRESERVE.copy())
-            )
+        preserve = build_effective_preserve_patterns(
+            load_update_preserve_settings()["selected_patterns"]
+        )
     
     print()
     print("=" * 55)
@@ -1169,15 +1161,9 @@ def update_to_version(tag: str, repo: str = None, preserve: list = None) -> bool
         repo = os.getenv('GITHUB_REPO', DEFAULT_REPO)
 
     if preserve is None:
-        preserve_str = os.getenv('UPDATE_PRESERVE', '')
-        if preserve_str:
-            preserve = build_effective_preserve_patterns(
-                [p.strip() for p in preserve_str.split(',')]
-            )
-        else:
-            preserve = build_effective_preserve_patterns(
-                load_update_preserve_settings().get("selected_patterns", DEFAULT_PRESERVE.copy())
-            )
+        preserve = build_effective_preserve_patterns(
+            load_update_preserve_settings()["selected_patterns"]
+        )
 
     print()
     print("=" * 55)

@@ -371,7 +371,7 @@ def test_tab_catalog_requires_live_direct_page_and_enabled_effective_preset():
     assert get_arena_direct_catalog_for_tab(
         config_engine,
         {**direct_tab, "url": "https://arena.ai/"},
-    ) is None
+    ) is not None
     assert get_arena_direct_catalog_for_tab(
         config_engine,
         {**direct_tab, "url": "https://gemini.google.com/app"},
@@ -979,6 +979,13 @@ def test_is_arena_direct_url_with_presets():
         }
     }
     assert _is_arena_direct_url("https://arena.ai/c/019f93c5-0ec7-70d9-9851-7089931253db", catalog_preset=disabled_preset) is False
+
+    # 根路径与 auto / battle / side-by-side 路径均返回 True
+    assert _is_arena_direct_url("https://arena.ai") is True
+    assert _is_arena_direct_url("https://arena.ai/") is True
+    assert _is_arena_direct_url("https://arena.ai/text/side-by-side") is True
+    assert _is_arena_direct_url("https://arena.ai/side-by-side") is True
+    assert _is_arena_direct_url("https://arena.ai/battle") is True
 
     # 畸形或非 Arena URL 防御
     assert _is_arena_direct_url("about:blank") is False

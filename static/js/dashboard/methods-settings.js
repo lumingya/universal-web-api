@@ -271,20 +271,27 @@
             this.notify('已重置为默认值，请点击保存以应用', 'info');
         },
 
-        // ========== 更新白名单 ==========
+        // ========== 自动更新时保留 ==========
 
         async loadUpdatePreserveSettings() {
+            if (this.isLoadingUpdatePreserve || this.isSavingUpdatePreserve) return;
             this.isLoadingUpdatePreserve = true;
             try {
                 const data = await this.apiRequest('/api/settings/update-preserve');
-                this.updatePreserveOptions = Array.isArray(data.options) ? data.options : [];
-                this.updatePreserveSelected = Array.isArray(data.selected_patterns) ? data.selected_patterns.slice() : [];
-                this.updatePreserveSelectedOriginal = JSON.parse(JSON.stringify(this.updatePreserveSelected));
+                if (!Array.isArray(data.options) || !data.options.length || !Array.isArray(data.selected_patterns)
+                    || !['saved', 'legacy_env', 'default'].includes(data.source)) {
+                    throw new Error('未收到完整的更新保留设置');
+                }
+                this.updatePreserveOptions = data.options;
+                this.updatePreserveSelected = data.selected_patterns.slice();
+                this.updatePreserveSelectedOriginal = this.updatePreserveSelected.slice();
+                this.updatePreserveSource = data.source;
             } catch (error) {
-                console.error('加载更新白名单失败:', error);
+                console.error('加载更新保留设置失败:', error);
                 this.updatePreserveOptions = [];
                 this.updatePreserveSelected = [];
                 this.updatePreserveSelectedOriginal = [];
+                this.updatePreserveSource = '';
             } finally {
                 this.isLoadingUpdatePreserve = false;
             }
@@ -303,6 +310,7 @@
         },
 
         async saveUpdatePreserveSettings() {
+            if (!this.updatePreserveCanSave) return;
             this.isSavingUpdatePreserve = true;
             try {
                 const data = await this.apiRequest('/api/settings/update-preserve', {
@@ -311,11 +319,10 @@
                         selected_patterns: this.updatePreserveSelected
                     })
                 });
-                this.updatePreserveSelected = Array.isArray(data.selected_patterns)
-                    ? data.selected_patterns.slice()
-                    : this.updatePreserveSelected;
-                this.updatePreserveSelectedOriginal = JSON.parse(JSON.stringify(this.updatePreserveSelected));
-                this.notify('更新白名单已保存，下次自动更新生效', 'success');
+                this.updatePreserveSelected = data.selected_patterns.slice();
+                this.updatePreserveSelectedOriginal = this.updatePreserveSelected.slice();
+                this.updatePreserveSource = data.source;
+                this.notify('保留设置已保存，下次自动更新生效', 'success');
             } catch (error) {
                 this.notify('保存失败: ' + error.message, 'error');
             } finally {
@@ -324,8 +331,8 @@
         },
 
         resetUpdatePreserveSettings() {
-            this.updatePreserveSelected = JSON.parse(JSON.stringify(this.updatePreserveSelectedOriginal));
-            this.notify('已恢复到上次保存的更新白名单', 'info');
+            this.updatePreserveSelected = this.updatePreserveSelectedOriginal.slice();
+            this.notify('已撤销未保存的保留设置改动', 'info');
         },
     });
 })();

@@ -16,7 +16,10 @@ window.SettingsTab = {
 
         updatePreserveOptions: { type: Array, required: true },
         updatePreserveSelected: { type: Array, required: true },
+        updatePreserveSource: { type: String, default: '' },
         updatePreserveChanged: { type: Boolean, default: false },
+        updatePreserveCanSave: { type: Boolean, default: false },
+        loadingUpdatePreserve: { type: Boolean, default: false },
         savingUpdatePreserve: { type: Boolean, default: false },
         
         selectorDefinitions: { type: Array, required: true },
@@ -55,7 +58,8 @@ window.SettingsTab = {
             for (const item of this.updatePreserveOptions || []) {
                 const key = item.category || '其他'
                 if (!groups[key]) groups[key] = []
-                groups[key].push(item)
+                const parent = this.updatePreserveSelected.find(pattern => item.pattern.startsWith(pattern + '/'))
+                groups[key].push({ ...item, parent })
             }
             return groups
         },
@@ -544,19 +548,20 @@ window.SettingsTab = {
                          @click="updatePreserveCollapsed = !updatePreserveCollapsed">
                         <div>
                             <h3 class="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                                <span class="text-xl">🛠️</span> 更新白名单
+                                <span class="text-xl">🛠️</span> 自动更新时保留
                             </h3>
-                            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">勾选后，下次自动更新会原样保留对应文件或目录</p>
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">勾选要保留的文件或目录，保存后从下次更新起生效</p>
                         </div>
                         <div class="flex gap-2 items-center">
-                            <button @click.stop="$emit('reset-update-preserve')" title="重置"
-                                    class="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">
+                            <button @click.stop="$emit('reset-update-preserve')" title="撤销未保存的改动"
+                                    :disabled="loadingUpdatePreserve || savingUpdatePreserve || !updatePreserveChanged"
+                                    class="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-60">
                                 <span v-html="$icons.arrowPath"></span>
                             </button>
                             <button @click.stop="$emit('save-update-preserve')"
-                                    :disabled="savingUpdatePreserve || !updatePreserveChanged"
+                                    :disabled="!updatePreserveCanSave"
                                     :class="['px-3 py-1.5 text-sm font-medium text-white rounded-lg transition-colors flex items-center gap-1 shadow-sm',
-                                             savingUpdatePreserve || !updatePreserveChanged
+                                             !updatePreserveCanSave
                                              ? 'bg-blue-400 cursor-not-allowed opacity-60'
                                              : 'bg-blue-600 hover:bg-blue-700']">
                                 <span v-if="!savingUpdatePreserve" v-html="$icons.arrowDownTray" class="w-4 h-4"></span>
@@ -569,22 +574,30 @@ window.SettingsTab = {
                     </div>
 
                     <div v-show="!updatePreserveCollapsed" class="p-4 space-y-4">
-                        <div class="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
-                            这里控制的是“更新时是否保留不变”，不是运行时是否启用。目录项会保留整个目录；未勾选的项目会在更新时按新版本内容覆盖或合并。
+                        <p v-if="loadingUpdatePreserve" class="text-sm text-gray-500 dark:text-gray-400">正在读取保留设置…</p>
+                        <p v-else-if="!updatePreserveSource" class="text-sm text-amber-700 dark:text-amber-300" role="alert">
+                            无法读取当前生效的保留设置，请点击设置页顶部的「刷新」重试。
+                        </p>
+                        <div v-else class="space-y-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                            <p>勾选 <code>config/</code> 会保留整个配置目录，包括所有子项，也会跳过新版在该目录新增的文件。</p>
+                            <p>未勾选且未随父目录保留的文件，只有在更新包里存在时才会被写入。普通配置会被覆盖，站点配置会按规则替换或合并。</p>
+                            <p v-if="updatePreserveSource === 'legacy_env'">当前选项来自原有的 <code>.env</code> 设置。点「保存」后，以这里保存的选项为准。</p>
                         </div>
 
-                        <div class="space-y-4">
+                        <div v-if="!loadingUpdatePreserve && updatePreserveSource" class="space-y-4">
                             <div v-for="(items, category) in updatePreserveGroups" :key="category" class="space-y-2">
                                 <div class="text-xs font-semibold uppercase tracking-[0.14em] text-gray-400 dark:text-gray-500">{{ category }}</div>
                                 <div class="grid gap-2 md:grid-cols-2">
                                     <label v-for="item in items" :key="item.id"
                                            class="flex items-start gap-3 rounded-xl border border-gray-200 bg-gray-50/70 px-3 py-3 text-sm text-gray-700 transition hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-200 dark:hover:bg-gray-900/70">
                                         <input type="checkbox"
-                                               :checked="updatePreserveSelected.includes(item.pattern)"
+                                               :checked="!!item.parent || updatePreserveSelected.includes(item.pattern)"
+                                               :disabled="!!item.parent || savingUpdatePreserve"
                                                @change="$emit('toggle-update-preserve', item.pattern)"
                                                class="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
                                         <span class="min-w-0">
                                             <span class="block font-medium">{{ item.label }}</span>
+                                            <span v-if="item.parent" class="mt-0.5 block text-xs font-medium text-blue-700 dark:text-blue-300">随 {{ item.parent }}/ 保留</span>
                                             <span class="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">{{ item.description }}</span>
                                         </span>
                                     </label>

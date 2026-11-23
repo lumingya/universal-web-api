@@ -190,18 +190,26 @@ def normalize_update_preserve_patterns(patterns: Any) -> List[str]:
 
 def load_update_preserve_settings(settings_path: Path | None = None) -> Dict[str, Any]:
     path = settings_path or UPDATE_SETTINGS_FILE
-    selected = get_default_update_preserve_patterns()
+    legacy = os.getenv("UPDATE_PRESERVE", "").strip()
+    selected = (
+        normalize_update_preserve_patterns(legacy.split(","))
+        if legacy else get_default_update_preserve_patterns()
+    )
+    source = "legacy_env" if legacy else "default"
 
     if path.exists():
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            selected = normalize_update_preserve_patterns(data.get("selected_patterns", []))
-        except Exception:
-            selected = get_default_update_preserve_patterns()
+            if isinstance(data, dict) and isinstance(data.get("selected_patterns"), list):
+                selected = normalize_update_preserve_patterns(data["selected_patterns"])
+                source = "saved"
+        except (OSError, ValueError):
+            pass
 
     return {
         "selected_patterns": selected,
+        "source": source,
         "options": get_update_preserve_options(),
         "settings_path": str(path).replace("\\", "/"),
     }
@@ -221,6 +229,7 @@ def save_update_preserve_settings(
 
     return {
         "selected_patterns": normalized,
+        "source": "saved",
         "settings_path": str(path).replace("\\", "/"),
     }
 

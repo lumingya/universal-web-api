@@ -18,7 +18,7 @@
 
 <br>
 
-当前版本：**3.0.2**（以 [`VERSION`](./VERSION) 为准，更新内容见 [`CHANGELOG-3.0.2.md`](./CHANGELOG-3.0.2.md)）
+当前版本：**3.0.3**（以 [`VERSION`](./VERSION) 为准，更新内容见 [`CHANGELOG-3.0.3.md`](./CHANGELOG-3.0.3.md)）
 
 Universal Web API 是一个运行在本机的 API 桥接与调试工具。它接管浏览器中已经登录的 AI 网页（ChatGPT、DeepSeek、Gemini、Claude 等），将网页对话转换为 OpenAI / Anthropic 兼容接口，供本地客户端调用。
 

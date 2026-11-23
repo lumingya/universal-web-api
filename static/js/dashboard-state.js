@@ -215,10 +215,11 @@ function saveStoredSitesCache(sites, currentDomain) {
             isSavingConstants: false,
             isLoadingConstants: false,
 
-            // 更新白名单
+            // 自动更新时保留
             updatePreserveOptions: [],
             updatePreserveSelected: [],
             updatePreserveSelectedOriginal: [],
+            updatePreserveSource: '',
             isSavingUpdatePreserve: false,
             isLoadingUpdatePreserve: false,
 
@@ -318,9 +319,14 @@ function saveStoredSitesCache(sites, currentDomain) {
             return JSON.stringify(this.selectorDefinitions) !== JSON.stringify(this.selectorDefinitionsOriginal);
         },
 
-        // 检测更新白名单是否有变更
         updatePreserveChanged() {
-            return JSON.stringify(this.updatePreserveSelected) !== JSON.stringify(this.updatePreserveSelectedOriginal);
+            return this.updatePreserveSelected.length !== this.updatePreserveSelectedOriginal.length
+                || this.updatePreserveSelected.some(pattern => !this.updatePreserveSelectedOriginal.includes(pattern));
+        },
+
+        updatePreserveCanSave() {
+            return !!this.updatePreserveSource && !this.isLoadingUpdatePreserve && !this.isSavingUpdatePreserve
+                && (this.updatePreserveChanged || this.updatePreserveSource === 'legacy_env');
         },
 
         updateAvailable() {

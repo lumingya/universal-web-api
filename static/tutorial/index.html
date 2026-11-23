@@ -1304,21 +1304,22 @@ BROWSER_PROFILE_NAME=Default</code></pre></div>
             <div class="co-bd"><span class="co-t">最关键的两个参数</span><p><strong>静默超时阈值</strong>决定"内容停多久算结束"；<strong>稳定判定次数</strong>决定"要连续多少次都没变化才算结束"。真正的结束条件：<code>(稳定次数 ≥ 稳定判定次数) AND (静默时间 &gt; 静默超时阈值)</code>。</p></div>
           </div>
 
-          <h3>配置管理与更新白名单</h3>
+          <h3>配置管理与自动更新</h3>
           <ul>
             <li><strong>保存：</strong>控制面板修改后点「保存」立即写入配置文件；大部分配置热重载即刻生效（环境配置除外）。</li>
             <li><strong>导入 / 导出：</strong>支持导出全量配置或单个站点配置为 JSON，也可导入。预设随站点配置一并导出。</li>
             <li><strong>备份：</strong>建议定期备份 <code>config/</code> 目录。</li>
           </ul>
-          <p><strong>更新白名单</strong>（控制面板 → 设置 → 更新白名单，保存后写入 <code>config/update_settings.json</code>，<strong>下次自动更新时生效</strong>）控制的是"更新时是否保留不变"，不是运行时开关：</p>
+          <p>在<strong>控制面板 → 设置 → 自动更新时保留</strong>勾选要保留的项目。保存后，下次自动更新以控制面板保存的选项为准。</p>
           <ul>
-            <li>勾选 <code>config/</code>、<code>app/</code>、<code>static/</code> 这类目录项时保留整个目录。</li>
-            <li><code>config/sites.json</code> 与 <code>config/commands.json</code> 未勾选时默认按更新器规则<strong>合并</strong>（保留本地站点、命令与状态，补入新版内容）；勾选则整份保持本地版本不动。</li>
+            <li>勾选 <code>config/</code> 会保留整个配置目录，也会跳过新版在这个目录新增的文件。想让其他配置继续接收更新，可以只勾选需要保留的文件。</li>
+            <li>未勾选且未随父目录保留的文件，仅在更新包提供同名文件时才会被写入。普通配置会被覆盖。未改动的站点配置会换成新版，可读取的本地站点改动会与新版合并。</li>
+            <li>首次保存前，若配置了旧版 <code>.env</code> 中的 <code>UPDATE_PRESERVE</code>，控制面板会显示其中有效的选项。</li>
             <li><code>config/update_settings.json</code> 会被自动保留，无需手动勾选。</li>
           </ul>
           <div class="co co-info">
             <i data-lucide="lock" style="width:18px;height:18px"></i>
-            <div class="co-bd"><span class="co-t">当前默认保留项</span><p><code>config/sites.local.json</code>（站点默认预设覆盖）、<code>config/commands.local.json</code>（命令启用状态与分组覆盖）、<code>chrome_profile/</code>（登录态，仅本机自用）、<code>venv/</code>、<code>logs/</code>、<code>image/</code>、<code>updater.py</code>、<code>.git/</code>、<code>__pycache__/</code>、<code>*.pyc</code>、<code>backup_*/</code>。只保留登录态和个人配置时保持默认勾选即可；要保留自己改过的代码时再勾对应目录。</p></div>
+            <div class="co-bd"><span class="co-t">默认保留项</span><p><code>config/sites.local.json</code>（站点默认预设覆盖）、<code>config/commands.local.json</code>（命令启用状态与分组覆盖）、<code>chrome_profile/</code>（登录态，仅本机自用）、<code>venv/</code>、<code>logs/</code>、<code>image/</code>、<code>.git/</code>、<code>__pycache__/</code>、<code>*.pyc</code>、<code>backup_*/</code>。</p></div>
           </div>
           <div class="co co-danger">
             <i data-lucide="alert-octagon" style="width:18px;height:18px"></i>

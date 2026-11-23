@@ -65,6 +65,7 @@ def is_arena_direct_url(url: Any) -> bool:
 
     Valid direct pages include:
     - /text/direct, /direct, or their subpaths
+    - /text, /chat, /image, /code
     - /c/... (specific direct chat conversation)
     - /image/direct, /code/direct
     """
@@ -77,9 +78,41 @@ def is_arena_direct_url(url: Any) -> bool:
         if hostname != "arena.ai" and not hostname.endswith(".arena.ai"):
             return False
         path = (parsed.path or "").rstrip("/").lower()
-        if path in {"/text/direct", "/direct", "/image/direct", "/code/direct", "/search/direct"}:
+        if path in {
+            "",
+            "/",
+            "/text/direct",
+            "/direct",
+            "/image/direct",
+            "/code/direct",
+            "/search/direct",
+            "/text",
+            "/chat",
+            "/image",
+            "/code",
+            "/search",
+            "/side-by-side",
+            "/battle",
+            "/auto",
+            "/arena",
+        }:
             return True
-        if path.startswith(("/text/direct/", "/direct/", "/image/direct/", "/code/direct/", "/search/direct/")):
+        if path.startswith((
+            "/text/direct/",
+            "/direct/",
+            "/image/direct/",
+            "/code/direct/",
+            "/search/direct/",
+            "/text/",
+            "/chat/",
+            "/image/",
+            "/code/",
+            "/search/",
+            "/side-by-side/",
+            "/battle/",
+            "/auto/",
+            "/arena/",
+        )):
             return True
         if path == "/c" or path.startswith("/c/"):
             return True

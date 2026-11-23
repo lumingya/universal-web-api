@@ -187,8 +187,9 @@ class SecureLogger:
         for handler in self._logger.handlers:
             handler.setLevel(logging.DEBUG)
 
-    def debug(self, msg: str):
-        self._emit(logging.DEBUG, 'DEBUG', msg)
+    def debug(self, msg: str, *args, **kwargs):
+        text = msg % args if args else msg
+        self._emit(logging.DEBUG, 'DEBUG', text)
 
     def debug_throttled(self, key: str, msg: str, interval_sec: float = 5.0):
         """在高频路径里限频输出 DEBUG，并附带被抑制次数。"""
@@ -219,17 +220,21 @@ class SecureLogger:
         if should_log:
             self.debug(_add_suppressed_marker(msg, suppressed))
 
-    def info(self, msg: str):
-        self._emit(logging.INFO, 'INFO', msg)
+    def info(self, msg: str, *args, **kwargs):
+        text = msg % args if args else msg
+        self._emit(logging.INFO, 'INFO', text)
 
-    def warning(self, msg: str):
-        self._emit(logging.WARNING, 'WARNING', msg)
+    def warning(self, msg: str, *args, **kwargs):
+        text = msg % args if args else msg
+        self._emit(logging.WARNING, 'WARNING', text)
 
-    def error(self, msg: str):
-        self._emit(logging.ERROR, 'ERROR', msg)
+    def error(self, msg: str, *args, exc_info: bool = False, **kwargs):
+        text = msg % args if args else msg
+        self._emit(logging.ERROR, 'ERROR', text, exc_info=bool(exc_info))
 
-    def exception(self, msg: str):
-        self._emit(logging.ERROR, 'ERROR', msg, exc_info=True)
+    def exception(self, msg: str, *args, **kwargs):
+        text = msg % args if args else msg
+        self._emit(logging.ERROR, 'ERROR', text, exc_info=True)
         
     def success(self, msg: str):
         self._emit(logging.INFO, 'SUCCESS', msg)

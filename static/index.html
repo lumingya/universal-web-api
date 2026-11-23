@@ -470,7 +470,10 @@
                               :saving-browser="isSavingConstants"
                               :update-preserve-options="updatePreserveOptions"
                               :update-preserve-selected="updatePreserveSelected"
+                              :update-preserve-source="updatePreserveSource"
                               :update-preserve-changed="updatePreserveChanged"
+                              :update-preserve-can-save="updatePreserveCanSave"
+                              :loading-update-preserve="isLoadingUpdatePreserve"
                               :saving-update-preserve="isSavingUpdatePreserve"
                               :selector-definitions="selectorDefinitions"
                               :definitions-changed="selectorDefinitionsChanged"
@@ -729,7 +732,7 @@
     <script type="module" src="static/js/components/ConfigTab.js?v=adapter-panel-1"></script>
     <script type="module" src="/static/js/components/LogsTab.js?v=3.0.1"></script>
     <script type="module" src="/static/js/components/RequestMonitorTab.js?v=operations-2"></script>
-    <script type="module" src="/static/js/components/SettingsTab.js?v=3.0.1"></script>
+    <script type="module" src="/static/js/components/SettingsTab.js?v=3.0.1-2"></script>
     <script type="module" src="/static/js/components/Dialogs.js?v=2.6.9"></script>
     <script type="module" src="/static/js/components/TabPoolTab.js?v=operations-2"></script>
     <script type="module" src="/static/js/components/commands/CommandsTabComputed.js?v=2.6.9"></script>
@@ -739,7 +742,7 @@
 
     <!-- 主应用逻辑 -->
 <script type="module" src="/static/js/dashboard-schema.js?v=attachments-1"></script>
-    <script type="module" src="/static/js/dashboard-state.js?v=studio-2"></script>
+    <script type="module" src="/static/js/dashboard-state.js?v=studio-3"></script>
     <!-- R2-8：dashboard-methods 按主题拆分；shared.js 与各分组须在组装器之前加载 -->
     <script type="module" src="/static/js/dashboard/shared.js?v=1.0.0"></script>
     <script type="module" src="/static/js/dashboard/methods-core.js?v=1.0.0"></script>
@@ -747,7 +750,7 @@
     <script type="module" src="/static/js/dashboard/methods-media.js?v=1.0.0"></script>
     <script type="module" src="/static/js/dashboard/methods-logs.js?v=1.0.0"></script>
     <script type="module" src="/static/js/dashboard/methods-transfer.js?v=1.0.0"></script>
-    <script type="module" src="/static/js/dashboard/methods-settings.js?v=1.0.0"></script>
+    <script type="module" src="/static/js/dashboard/methods-settings.js?v=1.0.1"></script>
     <script type="module" src="/static/js/dashboard/methods-versions.js?v=1.0.0"></script>
     <script type="module" src="/static/js/dashboard/methods-selectors.js?v=1.0.0"></script>
     <script type="module" src="/static/js/dashboard/methods-editing.js?v=1.0.0"></script>

@@ -24,7 +24,7 @@ def _shipped_sites() -> dict:
     if site_dir.is_dir() and any(site_dir.glob("*.json")):
         sites = {}
         for path in sorted(site_dir.glob("*.json")):
-            if path.name == "index.json":
+            if path.name == "index.json" or path.name.endswith(".local.json"):
                 continue
             payload = json.loads(path.read_text(encoding="utf-8"))
             sites[payload["site"]] = payload["config"]

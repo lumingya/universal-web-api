@@ -11,7 +11,7 @@ import math
 import random
 import re
 import time
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 from urllib.parse import unquote, urlparse
 
 from app.core.config import (
@@ -23,6 +23,7 @@ from app.core.config import (
 )
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
 from app.core.workflow.model_selection import execute_model_selection
+from app.services.arena_direct_models import resolve_arena_direct_model
 from app.services.arena_direct_models import (
     resolve_arena_direct_model,
 )
@@ -44,6 +45,8 @@ class WorkflowExecutorActionMixin:
         "new_chat",
         "new-chat",
         "prompts",
+        "side-by-side",
+        "battle",
     }
     _NEW_CHAT_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,40}$")
 
@@ -113,7 +116,14 @@ class WorkflowExecutorActionMixin:
     def _get_stealth_dom_click_targets(self) -> set:
         targets = self._normalize_string_set(BrowserConstants.get("STEALTH_DOM_CLICK_TARGETS"))
         if not targets:
-            targets = {"new_chat_btn", "input_box", "send_btn"}
+            targets = {
+                "new_chat_btn",
+                "input_box",
+                "send_btn",
+                "model_select_btn",
+                "arena_model_option",
+                "arena_model_select_btn",
+            }
         return targets
 
     def _should_use_stealth_dom_click(self, target_key: str = "") -> bool:
@@ -1346,11 +1356,25 @@ class WorkflowExecutorActionMixin:
         if ele is None:
             return ""
         try:
-            span = as_element(ele).find('css:span.flex-1.truncate.text-start, css:span.flex-1.truncate.text-left, css:span.flex-1.truncate', timeout=0.02)
+            span = as_element(ele).find('css:span.flex-1.truncate.text-start, css:span.flex-1.truncate.text-left, css:span.flex-1.truncate, css:span.truncate', timeout=0.02)
             if span:
                 val = str(getattr(span, "raw_text", "") or getattr(span, "text", "") or "").strip()
                 if val:
                     return val
+        except Exception:
+            pass
+        try:
+            svg_title = as_element(ele).find('css:svg title, css:title', timeout=0.02)
+            if svg_title:
+                val = str(getattr(svg_title, "raw_text", "") or getattr(svg_title, "text", "") or "").strip()
+                if val:
+                    return val
+        except Exception:
+            pass
+        try:
+            aria_label = str(getattr(ele, "attrs", {}).get("aria-label", "") or "").strip()
+            if aria_label and aria_label.lower() != "model":
+                return aria_label
         except Exception:
             pass
         for attr_name in ("raw_text", "text"):
@@ -1361,6 +1385,53 @@ class WorkflowExecutorActionMixin:
             if value:
                 return value
         return ""
+
+    def _is_arena_model_active_in_fiber(self, model: Dict[str, Any]) -> bool:
+        if not isinstance(model, dict):
+            return False
+        try:
+            target_id = str(model.get("arena_model_id") or "").strip().lower()
+            target_name = str(model.get("display_name") or model.get("name") or "").strip().lower()
+            if not target_id and not target_name:
+                return False
+            import json as _json
+            res = driver_for_tab(self.tab).run_cdp(
+                "Runtime.evaluate",
+                expression=f"""(() => {{
+                    const targetId = {_json.dumps(target_id)};
+                    const targetName = {_json.dumps(target_name)};
+                    const all = Array.from(document.querySelectorAll('*'));
+                    for (const el of all) {{
+                        const fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance'));
+                        if (!fiberKey) continue;
+                        let cur = el[fiberKey];
+                        let d = 0;
+                        while (cur && d < 15) {{
+                            if (cur.memoizedState) {{
+                                let st = cur.memoizedState;
+                                while (st) {{
+                                    if (st.memoizedState && typeof st.memoizedState === 'object') {{
+                                        let ms = st.memoizedState;
+                                        const mid = String(ms.id || '').trim().toLowerCase();
+                                        const mname = String(ms.displayName || ms.name || '').trim().toLowerCase();
+                                        if ((targetId && mid === targetId) || (targetName && mname === targetName)) {{
+                                            return true;
+                                        }}
+                                    }}
+                                    st = st.next;
+                                }}
+                            }}
+                            cur = cur.return;
+                            d++;
+                        }}
+                    }}
+                    return false;
+                }})()""",
+                returnByValue=True,
+            )
+            return bool((res or {}).get("result", {}).get("value"))
+        except Exception:
+            return False
 
     def _close_arena_model_dialog(self) -> None:
         try:
@@ -1389,278 +1460,16 @@ class WorkflowExecutorActionMixin:
         context: Optional[dict],
         optional: bool,
     ) -> None:
-        requested_model = str((context or {}).get("model") or "").strip()
-        if not requested_model:
-            logger.debug(
-                "[SELECT_MODEL] 请求未指定模型，保持页面当前选择"
-            )
-            return
-
-        model = resolve_arena_direct_model(
-            self.tab,
-            requested_model,
-            catalog_config=(context or {}).get("model_catalog"),
+        execute_model_selection(
+            self,
+            selector=selector,
+            target_key=target_key,
+            value=value,
+            context=context,
+            optional=optional,
+            handler_name="arena_direct",
         )
-        if not model:
-            if optional:
-                logger.warning(
-                    "[SELECT_MODEL] Arena Direct 模型已不在当前页面目录，跳过可选步骤: "
-                    f"model={self._compact_log_value(requested_model, 100)}"
-                )
-                return
-            raise WorkflowError("arena_direct_model_not_available")
-
-        settings = value if isinstance(value, dict) else {}
-        timeout = self._coerce_float(settings.get("timeout"), 3.0, minimum=0.5)
-        trigger_selector = str(
-            selector
-            or 'button[aria-haspopup="dialog"]:has(span.flex-1.truncate.text-start), button[aria-haspopup="dialog"]:has(span.flex-1.truncate.text-left), button[aria-haspopup="dialog"]:has(span.flex-1.truncate)'
-        ).strip()
-        dialog_opened = False
-
-        try:
-            with self._page_interaction_slot("SELECT_MODEL", target_key or "model_select_btn") as acquired:
-                if not acquired or self._check_cancelled():
-                    return
-
-                triggers = self._find_visible_elements(trigger_selector)
-                trigger = self._first_positioned_element(
-                    triggers,
-                    lambda ele: bool(self._model_element_label(ele)),
-                )
-                if trigger is None:
-                    mode_buttons = self._find_visible_elements('button[role="combobox"]')
-                    mode_button = self._first_positioned_element(
-                        mode_buttons,
-                        lambda ele: bool(str(getattr(ele, "text", "") or "").strip()),
-                    )
-                    if mode_button is None:
-                        raise ElementNotFoundError("Arena 模式选择按钮未找到")
-
-                    current_mode = str(getattr(mode_button, "text", "") or "").strip()
-                    if not current_mode.casefold().startswith("direct"):
-                        self._stealth_click_element(
-                            mode_button,
-                            target_key="arena_mode_select_btn",
-                            selector='button[role="combobox"]',
-                        )
-                        dialog_opened = True
-
-                        direct_option = None
-                        mode_deadline = time.time() + timeout
-                        while time.time() < mode_deadline and not self._check_cancelled():
-                            for candidate in self._find_visible_elements('[role="option"]'):
-                                label = str(getattr(candidate, "text", "") or "").strip()
-                                if (
-                                    label.casefold().startswith("direct")
-                                    and self._get_element_viewport_pos(candidate) is not None
-                                ):
-                                    direct_option = candidate
-                                    break
-                            if direct_option is not None:
-                                break
-                            time.sleep(0.05)
-                        if direct_option is None:
-                            raise ElementNotFoundError("Arena Direct 模式选项未找到")
-
-                        self._stealth_click_element(
-                            direct_option,
-                            target_key="arena_direct_mode_option",
-                            selector='[role="option"]',
-                        )
-                        dialog_opened = False
-
-                    trigger_deadline = time.time() + timeout
-                    while time.time() < trigger_deadline and not self._check_cancelled():
-                        triggers = self._find_visible_elements(trigger_selector)
-                        trigger = self._first_positioned_element(
-                            triggers,
-                            lambda ele: bool(self._model_element_label(ele)),
-                        )
-                        if trigger is not None:
-                            break
-                        time.sleep(0.05)
-                if trigger is None:
-                    raise ElementNotFoundError("Arena Direct 模型选择按钮未找到")
-
-                current_label = self._model_element_label(trigger)
-                if self._model_label_matches(current_label, model):
-                    logger.info(
-                        "[SELECT_MODEL] 页面已是目标模型，跳过切换: "
-                        f"model={model['display_name']}"
-                    )
-                    return
-
-                self._stealth_click_element(
-                    trigger,
-                    target_key=target_key or "model_select_btn",
-                    selector=trigger_selector,
-                )
-                dialog_opened = True
-
-                deadline = time.time() + timeout
-                search_input = None
-                while time.time() < deadline and not self._check_cancelled():
-                    inputs = self._find_visible_elements('input[placeholder="Search models"]')
-                    search_input = self._first_positioned_element(inputs)
-                    if search_input is not None:
-                        break
-                    time.sleep(0.05)
-                if search_input is None:
-                    raise ElementNotFoundError("Arena Direct 模型搜索框未出现")
-
-                # Arena filters this field by the visible label/public name;
-                # the internal name is retained for the exact data-value match.
-                search_text = str(
-                    model.get("search_name")
-                    or model.get("display_name")
-                    or model.get("public_name")
-                    or model.get("name")
-                    or ""
-                ).strip()
-                self._text_handler.fill_via_clipboard_no_click(search_input, search_text)
-
-                exact_identifiers = {
-                    str(model.get(key) or "").strip().casefold()
-                    for key in ("arena_model_id", "name", "search_name", "display_name", "public_name")
-                    if str(model.get(key) or "").strip()
-                }
-                if requested_model:
-                    exact_identifiers.add(str(requested_model).strip().casefold())
-
-                fuzzy_targets = [
-                    str(model.get(key) or "").strip().casefold()
-                    for key in ("search_name", "display_name", "public_name", "name")
-                    if str(model.get(key) or "").strip()
-                ]
-
-                option = None
-                while time.time() < deadline and not self._check_cancelled():
-                    candidates = self._find_visible_elements('[role="option"]')
-                    if not candidates:
-                        candidates = self._find_visible_elements(
-                            '[data-radix-collection-item], [cmdk-item], [role="listbox"] > *'
-                        )
-
-                    positioned_candidates = [
-                        c for c in candidates
-                        if self._get_element_viewport_pos(c) is not None
-                    ]
-
-                    # --- Pass 1: 精确标识符全等匹配 ---
-                    for candidate in positioned_candidates:
-                        cand_data_val = ""
-                        try:
-                            cand_data_val = str(candidate.attr("data-value") or "").strip().casefold()
-                        except Exception:
-                            pass
-
-                        cand_val = ""
-                        try:
-                            cand_val = str(candidate.attr("value") or "").strip().casefold()
-                        except Exception:
-                            pass
-
-                        cand_id = ""
-                        try:
-                            cand_id = str(candidate.attr("id") or "").strip().casefold()
-                        except Exception:
-                            pass
-
-                        cand_label = self._model_element_label(candidate).casefold()
-                        cand_raw = str(getattr(candidate, "text", "") or getattr(candidate, "raw_text", "") or "").strip().casefold()
-                        cand_first_line = cand_raw.splitlines()[0].strip() if cand_raw else ""
-
-                        cand_keys = {k for k in (cand_data_val, cand_val, cand_id, cand_label, cand_raw, cand_first_line) if k}
-                        if cand_keys.intersection(exact_identifiers):
-                            option = candidate
-                            break
-
-                    # --- Pass 2: 前缀及词边界匹配（仅在 Pass 1 无精确匹配时进行） ---
-                    if option is None:
-                        for candidate in positioned_candidates:
-                            cand_data_val = ""
-                            try:
-                                cand_data_val = str(candidate.attr("data-value") or "").strip().casefold()
-                            except Exception:
-                                pass
-                            cand_label = self._model_element_label(candidate).casefold()
-                            cand_raw = str(getattr(candidate, "text", "") or getattr(candidate, "raw_text", "") or "").strip().casefold()
-                            cand_first_line = cand_raw.splitlines()[0].strip() if cand_raw else ""
-
-                            for target_name in fuzzy_targets:
-                                if not target_name:
-                                    continue
-                                if (
-                                    cand_data_val == target_name
-                                    or cand_label == target_name
-                                    or cand_first_line == target_name
-                                    or cand_first_line.startswith(target_name)
-                                    or cand_label.startswith(target_name)
-                                ):
-                                    option = candidate
-                                    break
-                            if option is not None:
-                                break
-
-                    # --- Pass 3: 包含关系保底匹配（仅在 Pass 1 和 Pass 2 均未命中时进行） ---
-                    if option is None:
-                        for candidate in positioned_candidates:
-                            cand_label = self._model_element_label(candidate).casefold()
-                            cand_raw = str(getattr(candidate, "text", "") or getattr(candidate, "raw_text", "") or "").strip().casefold()
-                            cand_first_line = cand_raw.splitlines()[0].strip() if cand_raw else ""
-
-                            for target_name in fuzzy_targets:
-                                if not target_name:
-                                    continue
-                                if target_name in cand_first_line or target_name in cand_label:
-                                    option = candidate
-                                    break
-                            if option is not None:
-                                break
-
-                    if option is not None:
-                        break
-                    time.sleep(0.05)
-
-                if option is None:
-                    raise ElementNotFoundError(
-                        f"Arena Direct 模型选项未找到: {model['display_name']}"
-                    )
-
-                self._stealth_click_element(
-                    option,
-                    target_key="arena_model_option",
-                    selector='[role="option"]',
-                )
-                dialog_opened = False
-
-                verify_deadline = time.time() + min(timeout, 2.0)
-                while time.time() < verify_deadline and not self._check_cancelled():
-                    selected_triggers = self._find_visible_elements(trigger_selector)
-                    selected = self._first_positioned_element(
-                        selected_triggers,
-                        lambda ele: self._model_label_matches(
-                            self._model_element_label(ele),
-                            model,
-                        ),
-                    )
-                    if selected is not None:
-                        logger.info(
-                            "[SELECT_MODEL] Arena Direct 模型切换完成: "
-                            f"{current_label or '-'} -> {model['display_name']}"
-                        )
-                        return
-                    time.sleep(0.08)
-                raise WorkflowError("arena_direct_model_switch_unconfirmed")
-        except Exception as exc:
-            if optional:
-                logger.warning(f"[SELECT_MODEL] 可选模型切换失败，已跳过: {exc}")
-                return
-            raise
-        finally:
-            if dialog_opened:
-                self._close_arena_model_dialog()
+        return
 
     def _execute_click(self, selector: str, target_key: str, optional: bool) -> bool:
         """执行点击操作（v5.7 隐身模式人类化点击）"""
