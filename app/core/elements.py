@@ -12,6 +12,7 @@ app/core/elements.py - 元素查找和缓存
 """
 
 import time
+import json
 import hashlib
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -470,6 +471,102 @@ class ElementFinder:
         except Exception:
             return []
 
+    # 输入框候选的打分依据：ChatGPT 的消息正文若含内联代码块，代码块的 CodeMirror
+    # 编辑器也会命中 `[role="textbox"][contenteditable="true"]`，且文档顺序在前。
+    _CODE_EDITOR_SELECTOR = (
+        '.cm-editor, .cm-scroller, .cm-content, '
+        '[class*="InlineCodePane"], pre, code'
+    )
+    # 注意：不要在单个元素上逐个 run_js 做判定。DrissionPage 的元素级 run_js 里
+    # `this` 不是可靠的 DOM 元素（实测 matches() 恒返回 '0'、closest() 与
+    # getBoundingClientRect() 直接抛错），必须一次页面级查询拿到全部判定。
+    _INPUT_CANDIDATE_RANK_JS = """
+    (function(){
+      var sel = %s;
+      var CODE = %s;
+      var els = document.querySelectorAll(sel);
+      var out = [];
+      for (var i = 0; i < els.length; i++) {
+        var e = els[i];
+        var r = e.getBoundingClientRect();
+        var isCode = false;
+        try { isCode = !!(e.matches(CODE) || e.closest(CODE)); } catch (err) {}
+        var inForm = false;
+        try { inForm = !!e.closest('form'); } catch (err) {}
+        var hasBox = (r.width > 0 && r.height > 0);
+        var inVp = (r.top < window.innerHeight && r.bottom > 0 && r.width > 0);
+        // 打分：非代码编辑器 > 有盒子 > 在视口内或属于 composer 表单
+        var score = (isCode ? 0 : 4) + (hasBox ? 2 : 0) + ((inVp || inForm) ? 1 : 0);
+        out.push(score);
+      }
+      return out.join(',');
+    })()
+    """
+
+    def _rank_input_candidates(self, selector: str, count: int) -> List[int]:
+        """一次页面级查询拿到每个候选的得分（顺序与 find_all 的文档顺序一致）。"""
+        if not selector or count <= 0:
+            return []
+        try:
+            raw = driver_for_tab(self.tab).run_js(
+                self._INPUT_CANDIDATE_RANK_JS
+                % (
+                    json.dumps(selector, ensure_ascii=False),
+                    json.dumps(self._CODE_EDITOR_SELECTOR, ensure_ascii=False),
+                ),
+                as_expr=True,
+                timeout=5,
+            )
+        except Exception as exc:
+            logger.debug(f"[ELEMENT] input_box 候选打分失败（忽略）: {exc}")
+            return []
+        scores: List[int] = []
+        for part in str(raw or "").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                scores.append(int(float(part)))
+            except ValueError:
+                scores.append(0)
+        return scores
+
+    def _pick_best_input_candidate(self, elements: List[Any], selector: str = "") -> Optional[Any]:
+        """在多个 input_box 候选里挑真正的聊天输入框。
+
+        ChatGPT 的消息正文如果含内联代码块，代码块的 CodeMirror 也会命中
+        `[role="textbox"][contenteditable="true"]`，而且文档顺序在前。直接取第一个
+        就会把内容填进代码块，聊天框始终为空、发送按钮因此不存在。
+        """
+        if not elements:
+            return None
+        if len(elements) == 1:
+            return elements[0]
+        scores = self._rank_input_candidates(selector, len(elements))
+        if len(scores) != len(elements):
+            logger.debug(
+                "[ELEMENT] input_box 候选打分不可用，退回文档顺序 "
+                f"(total={len(elements)}, scores={len(scores)})"
+            )
+            return elements[0]
+        best_index = 0
+        best_score = scores[0]
+        for index in range(1, len(scores)):
+            # 同分时保留文档顺序，避免行为漂移
+            if scores[index] > best_score:
+                best_index, best_score = index, scores[index]
+        if best_score <= 0:
+            logger.debug(
+                "[ELEMENT] input_box 候选全部得分为 0，退回文档顺序 "
+                f"(total={len(elements)}, scores={scores})"
+            )
+            return elements[0]
+        logger.debug(
+            "[ELEMENT] input_box 择优 "
+            f"(total={len(elements)}, scores={scores}, picked={best_index})"
+        )
+        return elements[best_index]
+
     def find_with_fallback(self, primary_selector: str,
                            target_key: str,
                            timeout: float = None) -> Optional[Any]:
@@ -486,6 +583,23 @@ class ElementFinder:
         """
         if timeout is None:
             timeout = BrowserConstants.DEFAULT_ELEMENT_TIMEOUT
+
+        if target_key == "input_box":
+            # 输入框可能命中多个元素（消息正文里的代码块编辑器也会命中），
+            # 必须择优而不是取第一个，否则会把正文填进代码块。
+            candidates = []
+            try:
+                candidates = self.find_all(primary_selector, timeout=timeout) or []
+            except Exception:
+                candidates = []
+            candidates = [c for c in candidates if self._is_visible_enabled(c)]
+            if candidates:
+                ele = self._pick_best_input_candidate(candidates, primary_selector)
+            else:
+                ele = None
+            if ele:
+                return ele
+            # 都不可用才继续走回退选择器
 
         if target_key == "send_btn":
             ele = self._find_send_button_safely(primary_selector, timeout)
