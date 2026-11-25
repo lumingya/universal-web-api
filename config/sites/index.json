@@ -52,10 +52,10 @@
     },
     "chatgpt.com": {
       "file": "chatgpt.com.json",
-      "adapter_version": "2026.09.26",
+      "adapter_version": "2026.11.22",
       "min_app_version": "3.0.0",
-      "config_sha256": "33b62e9c5518f9ae34a1d2c4070cc25c75346ec430643183485f2bf20eef327f",
-      "file_sha256": "503bf1541ecde031bd5d73803038ee6462e7033a5282975950538aaaf49e5813"
+      "config_sha256": "5454d64859c3ba2fcd52588f442cc7b93aa54049f997a86e232986522af2ccab",
+      "file_sha256": "a10ad4d804f8f35f14d845e16ebf2c7311fde419f975a16a3b8c17a28d45224e"
     },
     "claude.ai": {
       "file": "claude.ai.json",
