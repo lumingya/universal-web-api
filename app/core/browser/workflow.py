@@ -1952,7 +1952,7 @@ class BrowserWorkflowMixin:
             except Exception as preload_exc:
                 logger.debug(f"页面音频捕获预热失败（已忽略）: {preload_exc}")
 
-        upload_history = self._get_upload_history_images_flag(default=True)
+        upload_history = self._get_upload_history_images_flag(default=False)
         logger.debug(f"图片历史上传: {upload_history}")
         image_source_messages = (
             self._select_image_source_messages(messages, upload_history)

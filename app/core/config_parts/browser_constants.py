@@ -125,6 +125,7 @@ class BrowserConstants:
         'DASHBOARD_SYSTEM_STATS_POLL_INTERVAL_MS': 3000,
         'ATTACHMENT_READY_IDLE_TIMEOUT': 8.0,
         'ATTACHMENT_READY_HARD_MAX_WAIT': 90.0,
+        'UPLOAD_HISTORY_IMAGES': False,
     }
     
     # ===== 类属性（会被配置文件覆盖）=====
@@ -226,6 +227,7 @@ class BrowserConstants:
     # 对话会话控制
     CONVERSATION_TIMEOUT_THRESHOLD = 0.0
     FORCE_NEW_CONVERSATION = False
+    UPLOAD_HISTORY_IMAGES = False
 
     # 低资源运行
     REQUEST_MONITOR_ENABLED = True

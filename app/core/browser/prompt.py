@@ -7,6 +7,7 @@ import re
 from typing import Optional, List, Dict, Any, Callable, TYPE_CHECKING
 
 from app.core.config import logger, BrowserConstants
+from app.core.config_parts.browser_constants import _resolve_browser_config_file
 from app.utils.image_handler import extract_images_from_messages
 
 if TYPE_CHECKING:
@@ -343,40 +344,56 @@ class BrowserPromptMixin:
                 result = f"{prefix}\n{result}"
         return result
 
-    def _get_upload_history_images_flag(self, default: bool = True) -> bool:
+    def _get_upload_history_images_flag(self, default: bool = False) -> bool:
         """
         获取是否上传历史对话图片的开关。
         优先级：
-        1) BrowserConstants.UPLOAD_HISTORY_IMAGES（若存在）
+        1) BrowserConstants.get("UPLOAD_HISTORY_IMAGES") / 类属性覆写
         2) config/browser_config.json 顶层键 UPLOAD_HISTORY_IMAGES（兜底）
-        3) default
+        3) default（默认 False，避免多轮对话每轮重传历史图片）
         """
+        def _coerce_flag(raw: Any) -> Optional[bool]:
+            if isinstance(raw, bool):
+                return raw
+            if isinstance(raw, (int, float)):
+                return bool(raw)
+            if isinstance(raw, str):
+                text = raw.strip().lower()
+                if text in ("1", "true", "yes", "y", "on"):
+                    return True
+                if text in ("0", "false", "no", "n", "off"):
+                    return False
+            return None
+
         try:
-            v = getattr(BrowserConstants, "UPLOAD_HISTORY_IMAGES")
-            if isinstance(v, bool):
-                return v
-            if isinstance(v, (int, float)):
-                return bool(v)
-            if isinstance(v, str):
-                return v.strip().lower() in ("1", "true", "yes", "y", "on")
-        except Exception:
+            cfg = getattr(BrowserConstants, "_config", None)
+            if isinstance(cfg, dict) and "UPLOAD_HISTORY_IMAGES" in cfg:
+                parsed = _coerce_flag(cfg.get("UPLOAD_HISTORY_IMAGES"))
+                if parsed is not None:
+                    return parsed
+        except AttributeError:
             pass
 
         try:
-            cfg_path = str(BrowserConstants._resolve_config_file())
+            cfg_file = getattr(BrowserConstants, "_config_file", None) or _resolve_browser_config_file()
+            cfg_path = str(cfg_file)
             if os.path.exists(cfg_path):
                 with open(cfg_path, "r", encoding="utf-8") as f:
                     data = json.load(f) or {}
                 if "UPLOAD_HISTORY_IMAGES" in data:
-                    vv = data.get("UPLOAD_HISTORY_IMAGES")
-                    if isinstance(vv, bool):
-                        return vv
-                    if isinstance(vv, (int, float)):
-                        return bool(vv)
-                    if isinstance(vv, str):
-                        return vv.strip().lower() in ("1", "true", "yes", "y", "on")
-        except Exception as e:
+                    parsed = _coerce_flag(data.get("UPLOAD_HISTORY_IMAGES"))
+                    if parsed is not None:
+                        return parsed
+        except (OSError, ValueError, TypeError) as e:
             logger.debug(f"[IMAGE] 读取 browser_config.json 兜底失败: {e}")
+
+        try:
+            v = BrowserConstants.get("UPLOAD_HISTORY_IMAGES")
+            parsed = _coerce_flag(v)
+            if parsed is not None:
+                return parsed
+        except (AttributeError, TypeError, ValueError):
+            pass
 
         return default
 
