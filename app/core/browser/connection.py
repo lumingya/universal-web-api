@@ -25,6 +25,8 @@ def _looks_like_transient_local_debug_error(error: Any) -> bool:
     text = str(error or "").strip().lower()
     if not text:
         return False
+    if "timed out" in text or "timeout" in text:
+        return True
     if "winerror 10048" in text:
         return True
     if "max retries exceeded" in text and "127.0.0.1" in text and "/json" in text:
@@ -555,55 +557,69 @@ class BrowserConnectionMixin:
         )
         return active_interval if self._has_recent_watchdog_activity() else idle_interval
 
-    def _connection_watchdog_loop(self) -> None:
-        while not self._watchdog_stop.wait(self._get_connection_watchdog_interval()):
-            try:
-                pool = self._tab_pool
-                if pool is not None:
-                    pool.run_watchdog_tick()
-            except Exception as e:
-                logger.debug(f"[BrowserWatchdog] 标签页巡检异常（忽略）: {e}")
+    def _watchdog_probe_health(self, timeout: float = 0.4):
+        port_open = self._is_debug_port_open(timeout=timeout)
+        session_alive = self._probe_browser_connection()
+        health = "alive" if session_alive else ("port_only" if port_open else "dead")
+        return port_open, session_alive, health
 
-            port_open = self._is_debug_port_open()
-            session_alive = self._probe_browser_connection()
-            health = "alive" if session_alive else ("port_only" if port_open else "dead")
+    def _run_connection_watchdog_tick(self) -> None:
+        if self._watchdog_stop.is_set():
+            return
+        try:
+            pool = self._tab_pool
+            if pool is not None:
+                pool.run_watchdog_tick()
+        except Exception as e:
+            logger.debug(f"[BrowserWatchdog] 标签页巡检异常（忽略）: {e}")
 
-            if health == self._last_watchdog_health:
-                continue
-
-            snapshot = self._get_watchdog_tab_snapshot()
+        port_open, session_alive, health = self._watchdog_probe_health()
+        if health != "alive":
+            if self._watchdog_stop.wait(0.8):
+                return
+            port_open, session_alive, health = self._watchdog_probe_health(timeout=1.0)
             if health == "alive":
-                if port_open:
-                    logger.info(
-                        f"[BrowserWatchdog] 受控浏览器连接正常 (port={self.port}, session=alive, {snapshot})"
-                    )
-                elif _looks_like_transient_local_debug_error(self._last_debug_port_error):
-                    logger.debug(
-                        f"[BrowserWatchdog] 长连接正常，已忽略瞬时调试端口探测失败 "
-                        f"(port={self.port}, session=alive, {snapshot})"
-                    )
-                else:
-                    logger.info(
-                        f"[BrowserWatchdog] 受控浏览器连接正常 "
-                        f"(port={self.port}, session=alive, port_probe=failed, {snapshot})"
-                    )
-            elif health == "port_only":
-                logger.warning(
-                    f"[BrowserWatchdog] 调试端口可达，但当前页面会话已失效 "
-                    f"(port={self.port}, session=dead, connected={self._connected}, {snapshot})"
+                logger.debug("[BrowserWatchdog] 复核连接正常，已忽略一次性探测抖动")
+        if self._watchdog_stop.is_set() or health == self._last_watchdog_health:
+            return
+
+        snapshot = self._get_watchdog_tab_snapshot()
+        if health == "alive":
+            if port_open:
+                logger.info(
+                    f"[BrowserWatchdog] 受控浏览器连接正常 (port={self.port}, session=alive, {snapshot})"
+                )
+            elif _looks_like_transient_local_debug_error(self._last_debug_port_error):
+                logger.debug(
+                    f"[BrowserWatchdog] 长连接正常，已忽略瞬时调试端口探测失败 "
+                    f"(port={self.port}, session=alive, {snapshot})"
                 )
             else:
-                detail = ""
-                if self._last_debug_port_error and not _looks_like_transient_local_debug_error(self._last_debug_port_error):
-                    detail = f", probe_error={self._last_debug_port_error}"
-                logger.error(
-                    f"[BrowserWatchdog] 受控浏览器调试端口不可达 "
-                    f"(port={self.port}, connected={self._connected}, {snapshot}{detail})"
+                logger.info(
+                    f"[BrowserWatchdog] 受控浏览器连接正常 "
+                    f"(port={self.port}, session=alive, port_probe=failed, {snapshot})"
                 )
+        elif health == "port_only":
+            logger.warning(
+                f"[BrowserWatchdog] 调试端口可达，但当前页面会话已失效 "
+                f"(port={self.port}, session=dead, connected={self._connected}, {snapshot})"
+            )
+        else:
+            detail = ""
+            if self._last_debug_port_error and not _looks_like_transient_local_debug_error(self._last_debug_port_error):
+                detail = f", probe_error={self._last_debug_port_error}"
+            logger.error(
+                f"[BrowserWatchdog] 受控浏览器调试端口不可达 "
+                f"(port={self.port}, connected={self._connected}, {snapshot}{detail})"
+            )
 
-            self._last_watchdog_port_open = port_open
-            self._last_watchdog_session_alive = session_alive
-            self._last_watchdog_health = health
+        self._last_watchdog_port_open = port_open
+        self._last_watchdog_session_alive = session_alive
+        self._last_watchdog_health = health
+
+    def _connection_watchdog_loop(self) -> None:
+        while not self._watchdog_stop.wait(self._get_connection_watchdog_interval()):
+            self._run_connection_watchdog_tick()
 
     def _start_connection_watchdog(self) -> None:
         if self._watchdog_thread and self._watchdog_thread.is_alive():

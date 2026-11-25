@@ -425,6 +425,7 @@ def _check_python_version() -> None:
 
 
 def _run_auto_update() -> None:
+    os.environ.pop("UWAPI_UPDATE_CHECK_RESULT", None)
     if not _env_flag("AUTO_UPDATE_ENABLED", True):
         _log("[INFO] 自动更新已禁用")
         _log("       本次不会自动应用更新；服务启动后仍会检查新版本并在设置图标提示")
@@ -440,7 +441,17 @@ def _run_auto_update() -> None:
         return
 
     _log("[INFO] 检查 GitHub 最新版本...")
-    result = _run([sys.executable, "updater.py"], check=False)
+    # 文件句柄在子进程启动前关闭，兼容 Windows 文件锁。
+    with tempfile.TemporaryDirectory(prefix="uwapi-update-") as temp_dir:
+        result_file = Path(temp_dir) / "result.json"
+        child_env = dict(os.environ, UWAPI_UPDATE_CHECK_RESULT_FILE=str(result_file))
+        result = _run([sys.executable, "updater.py"], check=False, env=child_env)
+        try:
+            payload = json.loads(result_file.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                os.environ["UWAPI_UPDATE_CHECK_RESULT"] = json.dumps(payload)
+        except (OSError, ValueError):
+            pass
     if result.returncode == 0:
         _log("[INFO] 自动更新已应用，继续启动服务...")
     else:
@@ -1627,6 +1638,9 @@ def _run_service_loop(
             child_env["UWAPI_PROXY_SECRET"] = proxy_secret
         if is_restart:
             child_env["UWAPI_IS_RESTART"] = "1"
+            child_env.pop("UWAPI_UPDATE_CHECK_RESULT", None)
+        else:
+            os.environ.pop("UWAPI_UPDATE_CHECK_RESULT", None)
         if backend_port is not None:
             # 子进程只监听回环，真正对外的是 handoff 代理；把公开监听地址告诉子进程，
             # 让它的启动期安全检查（公开监听必须启用认证）按真实暴露面判断。
