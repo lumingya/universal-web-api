@@ -805,6 +805,26 @@ class StreamMonitor:
             try:
                 score = as_element(ele).run_js(
                     """
+                    // 元素是否真的渲染出来了：祖先链上没有 display:none /
+                    // visibility:hidden / opacity:0，且自身盒子非零。有些站点会把
+                    // 「思考了 N 秒」这类活动摘要留在 DOM 里但折叠隐藏 —— 它
+                    // getBoundingClientRect() 全是 0，会被后面的中线切分当成
+                    // 「最左侧」而胜出，把真正的正文挤掉。判定失败一律当作已渲染，
+                    // 宁可保持原有行为，也不误删候选。
+                    const rendered = (function (el) {
+                        try {
+                            let n = el;
+                            while (n && n !== document.documentElement) {
+                                const st = window.getComputedStyle(n);
+                                if (!st) break;
+                                if (st.display === 'none' || st.visibility === 'hidden') return false;
+                                if (st.opacity !== '' && parseFloat(st.opacity) === 0) return false;
+                                n = n.parentElement;
+                            }
+                            const rr = el.getBoundingClientRect();
+                            return rr.width > 0 && rr.height > 0;
+                        } catch (e) { return true; }
+                    })(this);
                     const rect = this.getBoundingClientRect();
                     const ol = this.closest('main ol, ol, [role="feed"], [data-testid*="conversation"]');
                     let isReverse = false;
@@ -830,6 +850,7 @@ class StreamMonitor:
                     const contentBottom = Math.round(rect.bottom - scRect.top + scScrollTop);
 
                     return JSON.stringify({
+                        rendered: rendered,
                         top: Number(rect && rect.top || 0) + Number(window.scrollY || 0),
                         bottom: Number(rect && rect.bottom || 0) + Number(window.scrollY || 0),
                         contentTop,
@@ -846,6 +867,7 @@ class StreamMonitor:
                 score = decode_js_json(score, {}) or {}
                 if not isinstance(score, dict):
                     score = {}
+                rendered = bool(score.get("rendered", True))
                 bottom = float(score.get("contentBottom") or score.get("bottom") or 0)
                 left = float(score.get("left") or 0)
                 area = float(score.get("width") or 0) * float(score.get("height") or 0)
@@ -853,6 +875,7 @@ class StreamMonitor:
                 is_reverse = bool(score.get("isReverse", False))
                 side = str(score.get("side", "single") or "single")
             except Exception:
+                rendered = True
                 bottom = 0.0
                 left = 0.0
                 area = 0.0
@@ -863,6 +886,7 @@ class StreamMonitor:
             horizontal_score = left if column == "right" else -left
             scored.append({
                 "index": index,
+                "rendered": rendered,
                 "bottom": bottom,
                 "horizontal_score": horizontal_score,
                 "area": area,
@@ -872,6 +896,14 @@ class StreamMonitor:
                 "side": side,
                 "element": ele
             })
+
+        # 0. 先剔除「在 DOM 里但没渲染」的候选（折叠的思考摘要等）。
+        #    它们 getBoundingClientRect() 全是 0，会被中线切分当成最左侧而胜出。
+        #    只要还剩渲染出来的候选就用剩下的，避免被 0x0 的隐藏节点带跑。
+        if len(scored) > 1:
+            rendered_only = [item for item in scored if item.get("rendered")]
+            if rendered_only:
+                scored = rendered_only
 
         # 1. 严格过滤历史轮次，锁定最新消息轮次（Latest Turn Boundary）
         if len(scored) > 1:

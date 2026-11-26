@@ -140,11 +140,32 @@ function (cfgRaw) {
       return info;
     }
 
+    // 元素是否真的渲染出来了：祖先链上没有 display:none / visibility:hidden /
+    // opacity:0，且自身盒子非零。有些站点会把「思考了 N 秒」这类活动摘要留在
+    // DOM 里但折叠隐藏 —— 它 getBoundingClientRect() 全是 0，会被后面的中线
+    // 切分当成「最左侧」而胜出，把真正的正文挤掉。判定失败一律当作已渲染，
+    // 宁可保持原有行为，也不误删候选。
+    function isRendered(el) {
+      try {
+        var n = el;
+        while (n && n !== document.documentElement) {
+          var st = window.getComputedStyle(n);
+          if (!st) break;
+          if (st.display === 'none' || st.visibility === 'hidden') return false;
+          if (st.opacity !== '' && parseFloat(st.opacity) === 0) return false;
+          n = n.parentElement;
+        }
+        var r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      } catch (e) { return true; }
+    }
+
     var scored = [];
     for (var index = 0; index < els.length; index++) {
       var el = els[index];
-      var item = { index: index, bottom: 0, left: 0, area: 0, turn: 0, rev: false, side: 'single' };
+      var item = { index: index, bottom: 0, left: 0, area: 0, turn: 0, rev: false, side: 'single', rendered: true };
       try {
+        item.rendered = isRendered(el);
         var rect = el.getBoundingClientRect();
         var ol = el.closest('main ol, ol, [role="feed"], [data-testid*="conversation"]');
         var isReverse = false;
@@ -178,6 +199,13 @@ function (cfgRaw) {
       } catch (e) {}
       item.h = column === 'right' ? item.left : -item.left;
       scored.push(item);
+    }
+
+    // 0. 先剔除「在 DOM 里但没渲染」的候选（折叠的思考摘要等）。
+    //    只要还剩渲染出来的候选就用剩下的，避免被 0x0 的隐藏节点带跑。
+    if (scored.length > 1) {
+      var renderedOnly = scored.filter(function (s) { return s.rendered; });
+      if (renderedOnly.length) scored = renderedOnly;
     }
 
     // 1. 锁定最新轮次
