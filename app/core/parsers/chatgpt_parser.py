@@ -36,6 +36,11 @@ class ChatGPTParser(ResponseParser):
         self._content_references_sorted: List[Dict[str, Any]] = []
         self._content_references_dirty = False
         self._active_part_index: Optional[int] = None
+        # Raw text of the last append delivered to each part. The site
+        # re-sends the same append patch (overlapping SSE frames or a
+        # retry); taking it verbatim appends the same sentence twice --
+        # the UI then shows ``X X`` for a single phrase.
+        self._last_part_append: Dict[int, str] = {}
         self._pending_sse_chunk = ""
         self._ref_start = "\ue200"
         self._ref_end = "\ue201"
@@ -434,12 +439,21 @@ class ChatGPTParser(ResponseParser):
 
     def _set_message_part(self, index: int, value: str) -> None:
         self._message_parts[index] = str(value)
+        # The part was replaced wholesale, so the dedupe memory for it is stale.
+        self._last_part_append.pop(index, None)
         self._mark_message_parts_dirty()
 
     def _append_message_part(self, index: int, value: str) -> None:
         if not value:
             return
-        self._message_parts[index] = self._message_parts.get(index, "") + str(value)
+        text = str(value)
+        # Skip a verbatim repeat of the previous append to this part. Only the
+        # immediately preceding segment is compared, so a word or punctuation
+        # mark the model genuinely repeats is still delivered.
+        if self._last_part_append.get(index) == text:
+            return
+        self._last_part_append[index] = text
+        self._message_parts[index] = self._message_parts.get(index, "") + text
         self._mark_message_parts_dirty()
 
     def _remove_message_part(self, index: int) -> None:
@@ -660,6 +674,7 @@ class ChatGPTParser(ResponseParser):
         self._content_references_sorted = []
         self._content_references_dirty = False
         self._active_part_index = None
+        self._last_part_append = {}
         self._pending_sse_chunk = ""
         self._media_generation_state = {}
 
