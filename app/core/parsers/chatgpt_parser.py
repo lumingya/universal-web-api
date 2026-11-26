@@ -131,12 +131,57 @@ class ChatGPTParser(ResponseParser):
             self._pending_sse_chunk = ""
             complete_parts = [normalized.rstrip("\n")]
         else:
-            self._pending_sse_chunk = parts.pop() if parts else normalized
-            complete_parts = parts
+            tail = parts.pop() if parts else normalized
+            # DeepSeek and Qwen both have a final flush point; ChatGPT did not.
+            # When the last frame of a stream never receives its blank-line
+            # terminator it stayed in ``_pending_sse_chunk`` forever, so the
+            # whole tail disappeared once the stream ended. Observed as replies
+            # stopping mid-tag at ``[/wait`` or ``[waitForCompletion``, which
+            # made the downstream tool parser report
+            # "waitForCompletion must be a boolean".
+            #
+            # If the tail block already holds only complete ``data:`` payloads,
+            # it is a settled frame -- emit it instead of buffering it.
+            if self._is_settled_sse_frame(tail):
+                self._pending_sse_chunk = ""
+                complete_parts = parts + [tail]
+            else:
+                self._pending_sse_chunk = tail
+                complete_parts = parts
 
         if not complete_parts:
             return ""
         return "\n\n".join(complete_parts) + "\n\n"
+
+    @staticmethod
+    def _is_settled_sse_frame(block: str) -> bool:
+        """Whether ``block`` is a complete SSE frame with no partial payload.
+
+        Returns True only when every non-empty ``data:`` line parses as JSON
+        (or is the ``[DONE]`` sentinel) and at least one such line exists.
+        A frame that is still growing will fail ``json.loads`` on its last
+        line and be buffered as before.
+        """
+        text = str(block or "").strip()
+        if not text:
+            return False
+        saw_payload = False
+        for raw_line in text.split("\n"):
+            line = raw_line.strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload:
+                continue
+            if payload == "[DONE]":
+                saw_payload = True
+                continue
+            try:
+                json.loads(payload)
+            except Exception:
+                return False
+            saw_payload = True
+        return saw_payload
 
     def _iter_sse_json_events(self, chunk: str):
         """遍历 SSE 中可解析为 JSON 的事件。"""
