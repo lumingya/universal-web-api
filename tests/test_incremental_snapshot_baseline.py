@@ -171,3 +171,86 @@ def test_chatgpt_delta_matrix(previous, current, expected):
     parser = ChatGPTParser()
     parser._delivered_content = previous
     assert parser._compute_delta(previous, current) == expected
+
+
+# --------------------------------------------------------------------------- #
+# Cross-parser regression matrix: Qwen / DeepSeek / Gemini
+# Proves dropping reset() on a rewritten snapshot prevents duplicate emissions
+# and preserves normal incremental streaming across other parsers.
+# --------------------------------------------------------------------------- #
+
+from app.core.parsers.deepseek_parser import DeepSeekParser
+from app.core.parsers.gemini_parser import GeminiParser
+from app.core.parsers.qwen_parser import QwenParser
+
+
+def test_deepseek_rewritten_snapshot_does_not_duplicate_delivered_fragment():
+    """When an earlier SSE header/THINK fragment changes, RESPONSE is not re-sent."""
+    parser = DeepSeekParser()
+    snap1 = (
+        'event: update_session\ndata: {"updated_at": 100}\n\n'
+        'data: {"p":"response/fragments","v":['
+        '{"id":1,"type":"THINK","content":"plan v1"},'
+        '{"id":2,"type":"RESPONSE","content":"Hello"}'
+        ']}\n\n'
+    )
+    snap2 = (
+        'event: update_session\ndata: {"updated_at": 200}\n\n'
+        'data: {"p":"response/fragments","v":['
+        '{"id":1,"type":"THINK","content":"plan v2"},'
+        '{"id":2,"type":"RESPONSE","content":"Hello world"}'
+        ']}\n\n'
+    )
+
+    first = parser.parse_chunk(snap1)
+    second = parser.parse_chunk(snap2)
+
+    assert first["content"] == "Hello"
+    assert second["content"] == " world"
+    assert first["content"] + second["content"] == "Hello world"
+
+
+def test_gemini_rewritten_snapshot_does_not_duplicate_cumulative_answer():
+    """When the cumulative StreamGenerate envelope changes prefix, _last_len holds."""
+    parser = GeminiParser()
+    snap1 = (
+        ')]}\'\n\n90\n'
+        '[["wrb.fr", null, "[null, [\\"c_1\\", \\"r_1\\"], null, null, [[\\"rc_1\\", [\\"你好\\"]]]]"]]\n'
+    )
+    snap2 = (
+        ')]}\'\n\n93\n'
+        '[["wrb.fr", null, "[null, [\\"c_2\\", \\"r_2\\"], null, null, [[\\"rc_1\\", [\\"你好，世界！\\"]]]]"]]\n'
+    )
+
+    first = parser.parse_chunk(snap1)
+    second = parser.parse_chunk(snap2)
+
+    assert first["content"] == "你好"
+    assert second["content"] == "，世界！"
+    assert first["content"] + second["content"] == "你好，世界！"
+
+
+def test_qwen_rewritten_snapshot_does_not_duplicate_accumulated_reasoning():
+    """When Qwen's envelope is rewritten, _accumulated_reasoning is not reset."""
+    parser = QwenParser()
+    snap1 = (
+        'data: {"response.created": {"chat_id": "c_1", "response_id": "r_1"}}\n\n'
+        'data: {"choices": [{"delta": {"role": "assistant", "content": "", '
+        '"phase": "thinking_summary", "extra": {"summary_thought": {"content": ["第一步思考"]}}}}]}\n\n'
+    )
+    snap2 = (
+        'data: {"response.created": {"chat_id": "c_2", "response_id": "r_2"}}\n\n'
+        'data: {"choices": [{"delta": {"role": "assistant", "content": "", '
+        '"phase": "thinking_summary", "extra": {"summary_thought": {"content": ["第一步思考\\n\\n第二步思考"]}}}}]}\n\n'
+        'data: {"choices": [{"delta": {"role": "assistant", "content": "你好，世界！", '
+        '"phase": "answer", "status": "finished"}}]}\n\n'
+    )
+
+    first = parser.parse_chunk(snap1)
+    second = parser.parse_chunk(snap2)
+
+    assert first["reasoning_content"] == "第一步思考"
+    assert second["reasoning_content"] == "\n\n第二步思考"
+    assert first["reasoning_content"] + second["reasoning_content"] == "第一步思考\n\n第二步思考"
+    assert second["content"] == "你好，世界！"
+    assert second["done"] is True
