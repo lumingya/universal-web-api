@@ -29,6 +29,10 @@ class ChatGPTParser(ResponseParser):
         self._last_raw_length = 0
         self._last_raw_response = ""
         self._rendered_content = ""
+        # Text actually handed to the consumer. SSE is append-only, so the
+        # increment must be measured against what was delivered, not
+        # against the previous snapshot -- snapshots get rewritten in place.
+        self._delivered_content = ""
         self._message_parts: Dict[int, str] = {}
         self._message_parts_joined = ""
         self._message_parts_dirty = False
@@ -645,21 +649,35 @@ class ChatGPTParser(ResponseParser):
                 "wait_timeout_seconds": wait_timeout_seconds,
             }
 
-    @staticmethod
-    def _compute_delta(previous: str, current: str) -> str:
-        if not current or current == previous:
+    def _compute_delta(self, previous: str, current: str) -> str:
+        """Return only the text the consumer does not have yet.
+
+        The SSE consumer is append-only: whatever is emitted is permanent. So
+        the baseline must be *what has actually been delivered*, not the
+        previous snapshot. This site rewrites streaming parts in place, which
+        means ``current`` is frequently not an extension of ``previous`` -- it
+        can have a different middle, or even be shorter.
+
+        Comparing against ``previous`` and returning everything after the
+        longest common prefix re-sends every character after the edit point, so
+        whole commands appeared twice in the UI (``A B`` followed by ``A' B``
+        again).
+
+        Emit only when ``current`` extends what the consumer already holds. A
+        rewrite that cannot be expressed as an append is skipped: the consumer
+        cannot retract, and staying silent keeps the delivered text consistent
+        instead of duplicating it.
+        """
+        if not current or current == self._delivered_content:
             return ""
-        if not previous:
+        if not self._delivered_content:
+            self._delivered_content = current
             return current
-        if current.startswith(previous):
-            return current[len(previous):]
-
-        prefix_len = 0
-        max_prefix = min(len(previous), len(current))
-        while prefix_len < max_prefix and previous[prefix_len] == current[prefix_len]:
-            prefix_len += 1
-
-        return current[prefix_len:]
+        if current.startswith(self._delivered_content):
+            delta = current[len(self._delivered_content):]
+            self._delivered_content = current
+            return delta
+        return ""
     
     def reset(self):
         """重置状态"""
@@ -667,6 +685,7 @@ class ChatGPTParser(ResponseParser):
         self._last_raw_length = 0
         self._last_raw_response = ""
         self._rendered_content = ""
+        self._delivered_content = ""
         self._message_parts = {}
         self._message_parts_joined = ""
         self._message_parts_dirty = False

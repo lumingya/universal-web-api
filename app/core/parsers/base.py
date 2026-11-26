@@ -57,11 +57,20 @@ class ResponseParser(ABC):
         """
         Return the append-only delta for a full raw response snapshot.
 
-        Network listeners usually pass a growing full body to parsers. When the
-        browser replaces that snapshot with another response of the same or
-        greater length, slicing by length alone loses content. This helper
-        preserves the fast append path and resets parser state when the new
-        snapshot is not a prefix extension of the previous one.
+        Network listeners pass a growing full body to parsers, so the common case
+        is a prefix extension and only the tail is new.
+
+        The snapshot is NOT always append-only though. Some sites rewrite their
+        streaming parts in place, which makes the accumulated body diverge from
+        the previous snapshot in the middle (or even get shorter). Resetting the
+        parser and replaying the whole body re-emits every already-delivered
+        character, which shows up in the UI as whole sentences and commands
+        repeated (``A B`` then ``A' B`` again).
+
+        So on divergence, keep the parser state and feed the snapshot as the
+        current full body. The parser diffs against what it already delivered and
+        only emits genuinely new text; a rewrite that cannot be expressed as an
+        append is skipped instead of being duplicated.
         """
         if not isinstance(raw_response, str):
             raw_response = str(raw_response)
@@ -78,7 +87,10 @@ class ResponseParser(ABC):
             if raw_response.startswith(previous):
                 new_data = raw_response[len(previous):]
             else:
-                self.reset()
+                # The snapshot was rewritten and is no longer a prefix
+                # extension. Do NOT reset: that would re-emit everything
+                # already delivered. Feed the current snapshot as the full
+                # body and let the parser decide what is genuinely new.
                 new_data = raw_response
         else:
             new_data = raw_response
