@@ -12,6 +12,7 @@ from .registry import ParserRegistry
 from .gemini_parser import GeminiParser
 from .chatgpt_parser import ChatGPTParser
 from .deepseek_parser import DeepSeekParser
+from .copilot_chathub import CopilotWebSocketParser
 from .aistudio_parser import AIStudioParser
 from .doubao_parser import DoubaoParser
 from .claude_parser import ClaudeParser
@@ -36,6 +37,7 @@ from .grok_parser import GrokParser
 ParserRegistry.register_class(GeminiParser)
 ParserRegistry.register_class(ChatGPTParser)
 ParserRegistry.register_class(DeepSeekParser)
+ParserRegistry.register_class(CopilotWebSocketParser)
 ParserRegistry.register_class(AIStudioParser)
 ParserRegistry.register_class(DoubaoParser)
 ParserRegistry.register_class(ClaudeParser)
@@ -60,6 +62,7 @@ __all__ = [
     'GeminiParser',
     'ChatGPTParser',
     'DeepSeekParser',
+    'CopilotWebSocketParser',
     'AIStudioParser',
     'DoubaoParser',
     'ClaudeParser',
